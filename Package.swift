@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "SFCall",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v26)],
     products: [
         .library(name: "SFCallCore", targets: ["SFCallCore"]),
         .library(name: "SFCallMac", targets: ["SFCallMac"]),

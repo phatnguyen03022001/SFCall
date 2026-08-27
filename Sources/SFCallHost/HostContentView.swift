@@ -27,11 +27,22 @@ struct HostContentView: View {
             }
 
             GroupBox("Permissions") {
-                VStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 8) {
+                    permissionRow("Screen Capture", model.permissions.screenCapture)
                     permissionRow("Microphone", model.permissions.microphone)
                     permissionRow("Speech", model.permissions.speech)
-                    permissionRow("Screen Capture", model.permissions.screenCapture)
                     permissionRow("System Audio", model.permissions.systemAudio)
+
+                    Divider()
+
+                    Button("Grant Required Permissions") {
+                        model.grantRequiredPermissions()
+                    }
+                    .disabled(model.status.blocksPermissionGrant)
+
+                    Text("One SFCall action requests Screen Capture, Microphone, and Speech in sequence. System Audio is finalized when live capture starts.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 4)
             }
@@ -111,6 +122,15 @@ private extension HostRuntimeStatus {
             "running"
         case .failed(let message):
             "failed — \(message)"
+        }
+    }
+
+    var blocksPermissionGrant: Bool {
+        switch self {
+        case .refreshingSources, .requestingPermissions, .starting, .running:
+            true
+        case .idle, .ready, .failed:
+            false
         }
     }
 

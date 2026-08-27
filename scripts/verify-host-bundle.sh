@@ -11,17 +11,22 @@ test "$APP" = "$EXPECTED"
 test -x "$APP/Contents/MacOS/SFCallHost"
 /usr/bin/plutil -lint "$APP/Contents/Info.plist"
 test "$(/usr/bin/plutil -extract CFBundleIdentifier raw "$APP/Contents/Info.plist")" = "com.sfcall.host"
+test "$(/usr/bin/plutil -extract LSMinimumSystemVersion raw "$APP/Contents/Info.plist")" = "26.0"
 
 for key in \
     NSMicrophoneUsageDescription \
     NSSpeechRecognitionUsageDescription \
-    NSScreenCaptureUsageDescription \
     NSAudioCaptureUsageDescription
 do
     value="$(/usr/bin/plutil -extract "$key" raw "$APP/Contents/Info.plist")"
     compact="$(printf '%s' "$value" | tr -d '[:space:]')"
     test -n "$compact"
 done
+
+if /usr/bin/plutil -extract NSScreenCaptureUsageDescription raw "$APP/Contents/Info.plist" >/dev/null 2>&1; then
+    printf 'HOST_BUNDLE_VERIFY: FAIL — Screen Capture metadata is not part of the audio-only MVP\n' >&2
+    exit 1
+fi
 
 /usr/bin/codesign --verify --deep --strict "$APP"
 

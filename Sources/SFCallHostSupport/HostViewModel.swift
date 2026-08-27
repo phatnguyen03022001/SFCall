@@ -6,9 +6,10 @@ import SFCallCore
 @MainActor
 public final class HostViewModel: ObservableObject {
     @Published public private(set) var status: HostRuntimeStatus = .idle
-    @Published public private(set) var sources: [HostSourceItem] = []
+    @Published public private(set) var sources: [HostAudioSourceItem] = []
     @Published public var selectedSourceID: String?
     @Published public private(set) var permissions: HostPermissionSnapshot = .unknown
+    @Published public private(set) var intelligenceState: HostIntelligenceState
     @Published public private(set) var responseRequestCount = 0
 
     private let driver: any HostRuntimeDriving
@@ -16,32 +17,20 @@ public final class HostViewModel: ObservableObject {
 
     public init(driver: any HostRuntimeDriving) {
         self.driver = driver
+        self.intelligenceState = driver.intelligenceState()
     }
 
-    public var canEnumerateSources: Bool {
-        permissions.screenCapture == .authorized
-    }
-
-    public var shouldShowScreenCaptureSettings: Bool {
-        permissions.screenCapture == .denied
-    }
-
-    public var sourcePermissionMessage: String? {
-        canEnumerateSources ? nil : "Source enumeration requires Screen Capture permission."
-    }
-
-    public func refreshSources() {
+    public func refreshAudioSources() {
         guard !isBusyOrRunning else { return }
         status = .refreshingSources
 
-        driver.refreshSources { [weak self] result in
+        driver.refreshAudioSources { [weak self] result in
             guard let self else { return }
-
             switch result {
             case .success(let items):
                 let sorted = items.sorted {
-                    if $0.kind.rawValue != $1.kind.rawValue {
-                        return $0.kind.rawValue < $1.kind.rawValue
+                    if $0.isRunningOutput != $1.isRunningOutput {
+                        return $0.isRunningOutput && !$1.isRunningOutput
                     }
                     return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
                 }
@@ -51,7 +40,6 @@ public final class HostViewModel: ObservableObject {
                     self.selectedSourceID = nil
                 }
                 self.status = .ready
-
             case .failure(let error):
                 self.sources = []
                 self.selectedSourceID = nil
@@ -68,6 +56,7 @@ public final class HostViewModel: ObservableObject {
         driver.requestPermissions { [weak self] snapshot in
             guard let self else { return }
             self.permissions = snapshot
+            self.intelligenceState = self.driver.intelligenceState()
             self.status = returnStatus
         }
     }
@@ -75,7 +64,7 @@ public final class HostViewModel: ObservableObject {
     public func start() {
         guard !isBusyOrRunning else { return }
         guard let selectedSourceID else {
-            status = .failed("Select a capture source first.")
+            status = .failed("Select an audio source first.")
             return
         }
 
@@ -83,6 +72,7 @@ public final class HostViewModel: ObservableObject {
         driver.requestPermissions { [weak self] snapshot in
             guard let self else { return }
             self.permissions = snapshot
+            self.intelligenceState = self.driver.intelligenceState()
 
             guard snapshot.microphone == .authorized,
                   snapshot.speech == .authorized else {

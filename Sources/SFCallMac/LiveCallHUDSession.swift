@@ -20,22 +20,23 @@ public final class LiveCallHUDSession {
         baseline: CaseBaseline,
         clientFacts: [ClientFactRecord],
         hud: any LiveCallHUDPresenting,
-        onResponseRequest: @escaping @MainActor @Sendable (ResponseRequest) -> Void
+        onResponseRequest: @escaping @MainActor @Sendable (ResponseRequest) -> Void,
+        onTranscriptTurn: @escaping @MainActor @Sendable (TranscriptSpeaker, String, Bool) -> Void = { _, _, _ in }
     ) {
         self.hud = hud
 
         let eventBridge = LiveCallHUDEventBridge(
             hud: hud,
-            onResponseRequest: onResponseRequest
+            onResponseRequest: onResponseRequest,
+            onTranscriptTurn: onTranscriptTurn
         )
         self.controller = LiveCallSessionController(
             baseline: baseline,
             clientFacts: clientFacts,
-            onHUDUpdate: { content in
-                eventBridge.publishHUD(content)
-            },
-            onResponseRequest: { request in
-                eventBridge.publishResponse(request)
+            onHUDUpdate: { content in eventBridge.publishHUD(content) },
+            onResponseRequest: { request in eventBridge.publishResponse(request) },
+            onTranscriptTurn: { speaker, text, isFinal in
+                eventBridge.publishTranscript(speaker: speaker, text: text, isFinal: isFinal)
             }
         )
     }
@@ -49,33 +50,32 @@ public final class LiveCallHUDSession {
                 completion(result)
                 return
             }
-
             switch result {
-            case .success:
-                self.hud.show()
-            case .failure:
-                self.hud.hide()
+            case .success: self.hud.show()
+            case .failure: self.hud.hide()
             }
             completion(result)
         }
-
-        controller.start(runtime: runtime) { result in
-            startBridge.finish(result)
-        }
+        controller.start(runtime: runtime) { result in startBridge.finish(result) }
     }
 
     public func start(
-        source: CallCaptureSource,
+        source: AudioProcessSource,
         localeIdentifier: String = "en-US",
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
         start(
-            runtime: .native(
-                source: source,
-                localeIdentifier: localeIdentifier
-            ),
+            runtime: .native(source: source, localeIdentifier: localeIdentifier),
             completion: completion
         )
+    }
+
+    public func applyNegotiationAdvice(_ advice: NegotiationAdvice) {
+        controller.applyNegotiationAdvice(advice)
+    }
+
+    public func applyNegotiationFailure(_ message: String) {
+        controller.applyNegotiationFailure(message)
     }
 
     public func stop() {
@@ -87,43 +87,36 @@ public final class LiveCallHUDSession {
 private final class LiveCallHUDEventBridge: @unchecked Sendable {
     private let onHUDUpdate: @MainActor (PrivateHUDContent) -> Void
     private let onResponseRequest: @MainActor @Sendable (ResponseRequest) -> Void
+    private let onTranscriptTurn: @MainActor @Sendable (TranscriptSpeaker, String, Bool) -> Void
 
     @MainActor
     init(
         hud: any LiveCallHUDPresenting,
-        onResponseRequest: @escaping @MainActor @Sendable (ResponseRequest) -> Void
+        onResponseRequest: @escaping @MainActor @Sendable (ResponseRequest) -> Void,
+        onTranscriptTurn: @escaping @MainActor @Sendable (TranscriptSpeaker, String, Bool) -> Void
     ) {
-        self.onHUDUpdate = { content in
-            hud.update(content)
-        }
+        self.onHUDUpdate = { content in hud.update(content) }
         self.onResponseRequest = onResponseRequest
+        self.onTranscriptTurn = onTranscriptTurn
     }
 
     func publishHUD(_ content: PrivateHUDContent) {
-        if Thread.isMainThread {
-            MainActor.assumeIsolated {
-                onHUDUpdate(content)
-            }
-        } else {
-            DispatchQueue.main.async { [self] in
-                MainActor.assumeIsolated {
-                    onHUDUpdate(content)
-                }
-            }
-        }
+        runOnMain { self.onHUDUpdate(content) }
     }
 
     func publishResponse(_ request: ResponseRequest) {
+        runOnMain { self.onResponseRequest(request) }
+    }
+
+    func publishTranscript(speaker: TranscriptSpeaker, text: String, isFinal: Bool) {
+        runOnMain { self.onTranscriptTurn(speaker, text, isFinal) }
+    }
+
+    private func runOnMain(_ body: @escaping @MainActor @Sendable () -> Void) {
         if Thread.isMainThread {
-            MainActor.assumeIsolated {
-                onResponseRequest(request)
-            }
+            MainActor.assumeIsolated { body() }
         } else {
-            DispatchQueue.main.async { [self] in
-                MainActor.assumeIsolated {
-                    onResponseRequest(request)
-                }
-            }
+            DispatchQueue.main.async { MainActor.assumeIsolated { body() } }
         }
     }
 }
@@ -138,15 +131,9 @@ private final class LiveCallHUDStartBridge: @unchecked Sendable {
 
     func finish(_ result: Result<Void, Error>) {
         if Thread.isMainThread {
-            MainActor.assumeIsolated {
-                handler(result)
-            }
+            MainActor.assumeIsolated { handler(result) }
         } else {
-            DispatchQueue.main.async { [self] in
-                MainActor.assumeIsolated {
-                    handler(result)
-                }
-            }
+            DispatchQueue.main.async { [self] in MainActor.assumeIsolated { handler(result) } }
         }
     }
 }

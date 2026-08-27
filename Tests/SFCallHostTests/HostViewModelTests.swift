@@ -35,6 +35,41 @@ final class HostViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testGrantRequiredPermissionsRequestsOnceAndPublishesSnapshot() {
+        let driver = FakeHostRuntimeDriver()
+        driver.permissionSnapshot = HostPermissionSnapshot(
+            microphone: .authorized,
+            speech: .authorized,
+            screenCapture: .authorized,
+            systemAudio: .notDetermined
+        )
+        let model = HostViewModel(driver: driver)
+
+        model.grantRequiredPermissions()
+
+        XCTAssertEqual(driver.permissionRequestCount, 1)
+        XCTAssertEqual(model.permissions, driver.permissionSnapshot)
+        XCTAssertEqual(model.status, .idle)
+    }
+
+    @MainActor
+    func testGrantRequiredPermissionsPreservesReadyStateAfterSourceRefresh() {
+        let driver = FakeHostRuntimeDriver()
+        driver.sourcesResult = .success([
+            HostSourceItem(id: "app:1", kind: .application, title: "Test Call")
+        ])
+        driver.permissionSnapshot = .allAuthorized
+        let model = HostViewModel(driver: driver)
+        model.refreshSources()
+
+        model.grantRequiredPermissions()
+
+        XCTAssertEqual(driver.permissionRequestCount, 1)
+        XCTAssertEqual(model.permissions, .allAuthorized)
+        XCTAssertEqual(model.status, .ready)
+    }
+
+    @MainActor
     func testStartWithoutSelectionDoesNotRequestPermissionsOrRuntime() {
         let driver = FakeHostRuntimeDriver()
         let model = HostViewModel(driver: driver)

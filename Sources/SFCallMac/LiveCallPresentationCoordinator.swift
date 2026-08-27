@@ -40,8 +40,11 @@ public final class LiveCallPresentationCoordinator: @unchecked Sendable {
             baseline: baseline,
             clientFacts: clientFacts
         )
-        hud.sayThis = ""
-        hud.vietnameseHint = request == nil ? "" : "Đang chuẩn bị câu trả lời…"
+
+        if request != nil {
+            clearAdvice()
+            hud.analysisState = .analyzing
+        }
 
         return LiveCallPresentationUpdate(hud: hud, responseRequest: request)
     }
@@ -56,10 +59,44 @@ public final class LiveCallPresentationCoordinator: @unchecked Sendable {
             baseline: baseline,
             clientFacts: clientFacts
         )
-        hud.sayThis = ""
-        hud.vietnameseHint = ""
 
         return LiveCallPresentationUpdate(hud: hud, responseRequest: request)
+    }
+
+    public func applyNegotiationAdvice(_ advice: NegotiationAdvice) -> PrivateHUDContent {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        hud.clientTranslationVietnamese = advice.translatedClientTextVietnamese
+        hud.trapDetected = advice.trapDetected
+        hud.riskLevel = advice.riskLevel
+        hud.riskReasonVietnamese = advice.riskReasonVietnamese
+        hud.recommendedMoveVietnamese = advice.recommendedMoveVietnamese
+        hud.sayThis = advice.replyEnglish
+        hud.vietnameseHint = advice.replyVietnamese
+        hud.confidencePercent = advice.confidencePercent
+        hud.analysisState = .ready
+        return hud
+    }
+
+    public func applyNegotiationFailure(_ message: String) -> PrivateHUDContent {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        clearAdvice()
+        hud.analysisState = .unavailable(message)
+        return hud
+    }
+
+    private func clearAdvice() {
+        hud.clientTranslationVietnamese = ""
+        hud.trapDetected = false
+        hud.riskLevel = nil
+        hud.riskReasonVietnamese = ""
+        hud.recommendedMoveVietnamese = ""
+        hud.sayThis = ""
+        hud.vietnameseHint = ""
+        hud.confidencePercent = nil
     }
 }
 #endif

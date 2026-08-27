@@ -92,6 +92,7 @@ public final class HostViewModel: ObservableObject {
                     switch result {
                     case .success:
                         self.hasActiveRuntime = true
+                        self.permissions = self.driver.currentPermissions()
                         self.status = .running
                     case .failure(let error):
                         self.hasActiveRuntime = false

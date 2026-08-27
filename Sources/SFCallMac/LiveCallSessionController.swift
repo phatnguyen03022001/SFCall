@@ -49,8 +49,8 @@ public final class LiveCallSessionController: @unchecked Sendable {
 
         setActiveRuntime(runtime)
         runtime.remoteAudio.start(
-            onAudio: { sampleBuffer in
-                runtime.remoteSpeech.append(sampleBuffer: sampleBuffer)
+            onAudio: { buffer in
+                runtime.remoteSpeech.append(pcmBuffer: buffer)
             },
             completion: { [weak self] error in
                 guard let self else { return }

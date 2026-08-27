@@ -21,7 +21,7 @@
 - Keep `ScreenCaptureSourceCatalog` in the repository but remove it from the canonical smoke-host path; no unrelated cleanup.
 - Preserve the exact picker-provided `SCContentFilter` inside the selected `CallCaptureSource` until replacement or process-lifecycle cleanup.
 - Preserve one active runtime maximum, `en-US` Speech locale, separate remote/microphone channels, existing `ResponseRequest` routing, HUD behavior, and Stop cleanup.
-- No provider/LLM, SQLite/case-memory, transcript-persistence, raw-audio-persistence, HUD redesign, or unrelated framework changes.
+- No provider/LLM, SQLite/case-memory, transcript persistence, raw-audio persistence, HUD redesign, or unrelated framework changes.
 - No new Swift 6 Sendable/data-race/actor-isolation diagnostics.
 - Causal RED must be observed before production implementation, and the RED must fail because the corrected host interface/behavior does not exist yet.
 - Native acceptance is mandatory; automated GREEN alone does not close this correction.
@@ -30,14 +30,14 @@
 
 ## File Map
 
-- Create `Sources/SFCallMac/SystemCaptureSourcePicker.swift`: system picker integration and callback-to-source adaptation.
-- Modify `Sources/SFCallMac/ScreenCaptureSources.swift`: add only the narrow picker-filter factory needed to construct `CallCaptureSource`; keep legacy catalog intact.
-- Modify `Sources/SFCallHostSupport/HostModels.swift`: replace enumeration-oriented driver protocol with one-source selection semantics.
-- Modify `Sources/SFCallHostSupport/HostViewModel.swift`: selected-source state, choose/change/cancel/failure behavior, start gating.
-- Modify `Sources/SFCallHostSupport/LiveHostRuntimeDriver.swift`: use `SystemCaptureSourcePicker`, retain one exact source, remove CoreGraphics preflight/request path.
-- Modify `Sources/SFCallHost/HostContentView.swift`: replace custom dropdown/Refresh/Settings recovery with Choose/Change Source UI.
+- Create `Sources/SFCallMac/SystemCaptureSourcePicker.swift`: shared system picker integration and callback-to-source adaptation.
+- Modify `Sources/SFCallMac/ScreenCaptureSources.swift`: narrow picker-filter factory for `CallCaptureSource`; keep legacy catalog intact.
+- Modify `Sources/SFCallHostSupport/HostModels.swift`: one-source selection protocol/state contracts.
+- Modify `Sources/SFCallHostSupport/HostViewModel.swift`: choose/change/cancel/failure behavior and start gating.
+- Modify `Sources/SFCallHostSupport/LiveHostRuntimeDriver.swift`: retain one exact picker source and remove CoreGraphics preflight/request path.
+- Modify `Sources/SFCallHost/HostContentView.swift`: Choose/Change Source UI.
 - Modify `Tests/SFCallHostTests/HostViewModelTests.swift`: causal RED and final behavioral coverage.
-- Leave `Package.swift`, `ScreenAudioCapture.swift`, `LiveCallHUDSession.swift`, signing scripts, `SFCallCore`, and legacy `ScreenCaptureSourceCatalog` structurally unchanged unless compilation proves a strictly necessary import/access-level adjustment.
+- Leave `Package.swift`, `ScreenAudioCapture.swift`, `LiveCallHUDSession.swift`, signing scripts, `SFCallCore`, and the legacy `ScreenCaptureSourceCatalog` structurally unchanged unless compilation proves a strictly necessary import/access-level adjustment.
 
 ---
 
@@ -52,9 +52,9 @@
 - Future `HostSourceSelectionResult.selected(HostSourceItem)` / `.cancelled`
 - Future driver `start(onResponseRequest:completion:)` that starts its internally retained selected source.
 
-- [ ] **Step 1: Replace enumeration-centric host tests with corrected source-selection tests before touching production files.**
+- [ ] **Step 1: Write corrected source-selection tests before touching production files.**
 
-Add tests covering these exact behaviors:
+Add these tests:
 
 ```swift
 @MainActor
@@ -94,7 +94,6 @@ func testSuccessfulReplacementReplacesPreviousSource() {
         .selected(HostSourceItem(id: "picker:app:1", kind: .application, title: "Zoom"))
     )
     model.chooseSource()
-
     driver.selectionResult = .success(
         .selected(HostSourceItem(id: "picker:window:2", kind: .window, title: "Chrome — Meeting"))
     )
@@ -168,21 +167,45 @@ func testSourceSelectionIsNotGatedByBlanketScreenCaptureState() {
     XCTAssertEqual(driver.chooseSourceCount, 1)
     XCTAssertEqual(model.selectedSource?.id, "picker:window:1")
 }
+
+@MainActor
+func testStartUsesRetainedReplacementAndResponseCallback() {
+    let driver = FakeHostRuntimeDriver()
+    driver.permissionSnapshot = HostPermissionSnapshot(
+        microphone: .authorized,
+        speech: .authorized,
+        screenCapture: .authorized,
+        systemAudio: .notDetermined
+    )
+    let model = HostViewModel(driver: driver)
+
+    driver.selectionResult = .success(
+        .selected(HostSourceItem(id: "picker:app:1", kind: .application, title: "Zoom"))
+    )
+    model.chooseSource()
+    driver.selectionResult = .success(
+        .selected(HostSourceItem(id: "picker:window:2", kind: .window, title: "Chrome — Call"))
+    )
+    model.chooseSource()
+
+    model.start()
+    driver.emitResponseRequest()
+
+    XCTAssertEqual(driver.lastStartedSourceID, "picker:window:2")
+    XCTAssertEqual(model.status, .running)
+    XCTAssertEqual(model.responseRequestCount, 1)
+}
 ```
 
-Also add one test that chooses source A, replaces it with source B, starts, emits one response request through the fake callback, and asserts that the fake started B and `responseRequestCount == 1`.
+Extend `HostTestError` with `case sourceSelection` returning `"source selection failed"`. The fake driver in this RED commit may intentionally reference the future selection API so the test target fails against the old production protocol.
 
-Extend `HostTestError` with `case sourceSelection` returning `"source selection failed"`.
-
-The fake driver in this RED commit may intentionally reference the future selection API so the focused test target fails to compile against the old production protocol.
-
-- [ ] **Step 2: Run the focused test and record causal RED.**
+- [ ] **Step 2: Run focused RED.**
 
 ```bash
 xcrun swift test --filter HostViewModelTests
 ```
 
-Expected: non-zero exit caused by missing corrected source-selection contracts such as `HostViewModel.chooseSource`, `HostViewModel.selectedSource`, or `HostSourceSelectionResult`. Do not accept an unrelated package/toolchain failure as causal RED.
+Expected: non-zero exit caused by missing corrected source-selection contracts such as `HostViewModel.chooseSource`, `HostViewModel.selectedSource`, or `HostSourceSelectionResult`. Do not accept an unrelated package/toolchain failure.
 
 - [ ] **Step 3: Commit the test-only RED.**
 
@@ -202,7 +225,7 @@ Do not modify production files before this RED evidence exists.
 - Modify: `Sources/SFCallHostSupport/HostViewModel.swift`
 - Modify: `Tests/SFCallHostTests/HostViewModelTests.swift`
 
-**Interfaces:**
+**Produces:**
 
 ```swift
 public enum HostSourceSelectionResult: Equatable, Sendable {
@@ -215,23 +238,20 @@ public protocol HostRuntimeDriving: AnyObject {
     func chooseSource(
         completion: @escaping @MainActor (Result<HostSourceSelectionResult, Error>) -> Void
     )
-
     func requestPermissions(
         completion: @escaping @MainActor (HostPermissionSnapshot) -> Void
     )
-
     func start(
         onResponseRequest: @escaping @MainActor @Sendable (ResponseRequest) -> Void,
         completion: @escaping @MainActor (Result<Void, Error>) -> Void
     )
-
     func stop()
 }
 ```
 
-- [ ] **Step 1: Replace `.refreshingSources` with `.choosingSource` in `HostRuntimeStatus` and replace the old driver enumeration/start-by-ID signatures with the exact protocol above.**
+- [ ] **Step 1: Replace `.refreshingSources` with `.choosingSource` and replace the old protocol enumeration/start-by-ID methods with the exact contract above.**
 
-- [ ] **Step 2: Replace `sources`/`selectedSourceID` with one selected presentation value and implement choice semantics.**
+- [ ] **Step 2: Replace array/ID view-model state with one selected source.**
 
 ```swift
 @Published public private(set) var selectedSource: HostSourceItem?
@@ -243,7 +263,6 @@ public func chooseSource() {
 
     driver.chooseSource { [weak self] result in
         guard let self else { return }
-
         switch result {
         case .success(.selected(let item)):
             self.selectedSource = item
@@ -254,11 +273,9 @@ public func chooseSource() {
                 systemAudio: self.permissions.systemAudio
             )
             self.status = .ready
-
         case .success(.cancelled):
             self.selectedSource = priorSource
             self.status = priorSource == nil ? .idle : .ready
-
         case .failure(let error):
             self.selectedSource = priorSource
             self.status = .failed(Self.message(for: error))
@@ -267,43 +284,31 @@ public func chooseSource() {
 }
 ```
 
-Delete `refreshSources`, `canEnumerateSources`, `shouldShowScreenCaptureSettings`, and `sourcePermissionMessage`.
+Delete `sources`, `selectedSourceID`, `refreshSources`, `canEnumerateSources`, `shouldShowScreenCaptureSettings`, and `sourcePermissionMessage`. `grantRequiredPermissions()` returns to `.ready` iff `selectedSource != nil`, otherwise `.idle`. `start()` requires a selected source, requests Microphone/Speech, and invokes the new driver `start(...)` without a source ID. Include `.choosingSource` in `isBusyOrRunning`.
 
-Update `grantRequiredPermissions()` to return to `.ready` iff `selectedSource != nil`, otherwise `.idle`.
-
-Update `start()` to require `selectedSource != nil`, request Microphone/Speech through the driver, and call the driver’s no-source-ID `start(...)` while preserving the current response-request callback and running-state logic.
-
-Include `.choosingSource` in `isBusyOrRunning`.
-
-- [ ] **Step 3: Update the fake driver.**
-
-The fake must expose:
+- [ ] **Step 3: Update the fake driver with exact retained-source behavior.**
 
 ```swift
 var selectionResult: Result<HostSourceSelectionResult, Error> = .success(.cancelled)
 private(set) var chooseSourceCount = 0
 private(set) var selectedSourceID: String?
 private(set) var lastStartedSourceID: String?
+private var responseHandler: (@MainActor @Sendable (ResponseRequest) -> Void)?
 ```
 
-On `.selected(item)`, retain `item.id`; on cancel/failure preserve the retained ID. In `start(...)`, set `lastStartedSourceID = selectedSourceID`. Preserve the existing permission/start/stop counters and add an `emitResponseRequest()` helper that invokes the last registered response callback.
+On `.selected(item)`, retain `item.id`; cancellation/failure preserves it. `start(...)` sets `lastStartedSourceID = selectedSourceID` and stores `onResponseRequest`. `emitResponseRequest()` invokes that stored callback with an existing valid test `ResponseRequest` fixture. Preserve current permission/start/stop counters.
 
-- [ ] **Step 4: Run focused GREEN.**
+- [ ] **Step 4: Run focused GREEN and commit.**
 
 ```bash
 xcrun swift test --filter HostViewModelTests
-```
-
-Require PASS.
-
-- [ ] **Step 5: Commit.**
-
-```bash
 git add Sources/SFCallHostSupport/HostModels.swift \
         Sources/SFCallHostSupport/HostViewModel.swift \
         Tests/SFCallHostTests/HostViewModelTests.swift
 git commit -m "refactor: model one system-picked source"
 ```
+
+Require PASS before commit.
 
 ---
 
@@ -313,7 +318,7 @@ git commit -m "refactor: model one system-picked source"
 - Create: `Sources/SFCallMac/SystemCaptureSourcePicker.swift`
 - Modify: `Sources/SFCallMac/ScreenCaptureSources.swift`
 
-**Interfaces:**
+**Produces:**
 
 ```swift
 public enum SystemCaptureSourcePickerResult {
@@ -324,22 +329,61 @@ public enum SystemCaptureSourcePickerResult {
 public final class SystemCaptureSourcePicker
 ```
 
-with:
+with a MainActor `present(completion:)` entry point.
+
+- [ ] **Step 1: Add the narrow picker-filter factory.**
 
 ```swift
-@MainActor
-public func present(
-    completion: @escaping @MainActor (Result<SystemCaptureSourcePickerResult, Error>) -> Void
-)
+public enum CallCaptureSourceError: LocalizedError, Sendable {
+    case unsupportedPickerStyle
+
+    public var errorDescription: String? {
+        "SFCall supports one application or one window source."
+    }
+}
+
+extension CallCaptureSource {
+    static func fromPickerFilter(_ filter: SCContentFilter) throws -> CallCaptureSource {
+        switch filter.style {
+        case .application:
+            let candidate = filter.includedApplications.first?.applicationName
+            let title = (candidate?.isEmpty == false) ? candidate! : "Selected Application"
+            return CallCaptureSource(
+                id: "picker:application:\(UUID().uuidString)",
+                kind: .application,
+                title: title,
+                filter: filter
+            )
+
+        case .window:
+            let window = filter.includedWindows.first
+            let pieces = [window?.owningApplication?.applicationName, window?.title]
+                .compactMap { value -> String? in
+                    guard let value, !value.isEmpty else { return nil }
+                    return value
+                }
+            return CallCaptureSource(
+                id: "picker:window:\(UUID().uuidString)",
+                kind: .window,
+                title: pieces.isEmpty ? "Selected Window" : pieces.joined(separator: " — "),
+                filter: filter
+            )
+
+        case .display, .none:
+            throw CallCaptureSourceError.unsupportedPickerStyle
+
+        @unknown default:
+            throw CallCaptureSourceError.unsupportedPickerStyle
+        }
+    }
+}
 ```
 
-- [ ] **Step 1: Add a narrow picker-filter factory to `CallCaptureSource`.**
+Keep the existing `filter` storage and legacy catalog unchanged.
 
-Use `SCContentFilter.style` to allow only `.application` and `.window`. Preserve the exact passed filter object. For application labels use the first nonblank `includedApplications.first?.applicationName`, otherwise `"Selected Application"`. For window labels join the first included window’s owning application name and nonblank title with `" — "`, otherwise `"Selected Window"`. Generate a session-only ID such as `picker:application:<UUID>` or `picker:window:<UUID>`. Reject `.display`, `.none`, and unknown future styles with a localized `unsupportedPickerStyle` error.
+- [ ] **Step 2: Implement the adapter against the shared system picker.**
 
-- [ ] **Step 2: Implement `SystemCaptureSourcePicker` against `SCContentSharingPicker.shared`.**
-
-Immediately before presentation configure:
+Configure before first presentation:
 
 ```swift
 var configuration = SCContentSharingPickerConfiguration()
@@ -349,12 +393,19 @@ configuration.allowsChangingSelectedContent = false
 let picker = SCContentSharingPicker.shared
 picker.defaultConfiguration = configuration
 picker.maximumStreamCount = 1
-picker.add(self)
+picker.add(observer)
 picker.isActive = true
-picker.present()
 ```
 
-Implement all required observer callbacks:
+Keep the shared picker active and the observer registered for the adapter/host lifetime, matching Apple’s system-picker lifecycle. Do **not** set `isActive = false` after a successful selection or cancellation. Unregister/deactivate only during adapter teardown; if direct `deinit` isolation is awkward under Swift 6, use a dedicated observer bridge whose reference can be removed on the main queue without capturing a deinitializing `self`.
+
+Each `present(...)` stores exactly one pending completion, fails closed with local `pickerAlreadyActive` if another request is pending, and calls:
+
+```swift
+SCContentSharingPicker.shared.present()
+```
+
+Implement required observer callbacks:
 
 ```swift
 func contentSharingPicker(
@@ -371,24 +422,17 @@ func contentSharingPicker(
 func contentSharingPickerStartDidFailWithError(_ error: any Error)
 ```
 
-Semantics:
-- update → factory → `.selected(source)`;
-- cancel → `.cancelled`;
-- start failure → propagate exact error;
-- every terminal callback consumes the one pending completion exactly once, removes the observer, and sets `picker.isActive = false`;
-- a second `present` while one completion is pending fails closed with a local `pickerAlreadyActive` error instead of replacing the first callback.
+`didUpdateWith` converts the exact filter and completes `.selected(source)`; cancel completes `.cancelled`; start failure propagates the exact error. Every terminal callback consumes and clears the one pending completion exactly once but leaves picker activation/observer registration intact for future Change Source operations.
 
-Because `SCContentFilter`/`CallCaptureSource` are not assumed Sendable, follow the repository’s existing lock + `DispatchQueue.main.async` + `MainActor.assumeIsolated` transfer pattern rather than moving the filter/source through an unconstrained `Task`.
+Because `SCContentFilter`/`CallCaptureSource` are not assumed Sendable, follow the repository’s lock + `DispatchQueue.main.async` + `MainActor.assumeIsolated` transfer pattern rather than sending the filter/source through an unconstrained `Task`.
 
-- [ ] **Step 3: Compile `SFCallMac`.**
+- [ ] **Step 3: Compile and commit.**
 
 ```bash
 xcrun swift build --target SFCallMac 2>&1 | tee /tmp/sfcall-picker-mac-build.log
 ```
 
-Require exit 0 and no new Sendable/data-race/actor-isolation diagnostics.
-
-- [ ] **Step 4: Commit.**
+Require exit 0 and no new Sendable/data-race/actor-isolation diagnostics, then:
 
 ```bash
 git add Sources/SFCallMac/SystemCaptureSourcePicker.swift \
@@ -405,14 +449,11 @@ git commit -m "feat: add system capture source picker"
 - Modify: `Sources/SFCallHost/HostContentView.swift`
 - Modify: `Tests/SFCallHostTests/HostViewModelTests.swift` only if compilation exposes a contract mismatch already authorized above.
 
-**Interfaces:**
-- `LiveHostRuntimeDriver` owns one `SystemCaptureSourcePicker` and one `CallCaptureSource?`.
-- `chooseSource` stores the exact selected object.
-- `start` consumes that exact object without re-enumeration or reconstruction.
+**Consumes:** `SystemCaptureSourcePicker` and one exact selected `CallCaptureSource`.
 
 - [ ] **Step 1: Remove the legacy source gate from the real driver.**
 
-Delete `import CoreGraphics`, `catalog`, `sourceByID`, `refreshSources`, `requestScreenCaptureIfNeeded`, and `SourceCatalogTransfer` from the host driver.
+Delete `import CoreGraphics`, `catalog`, `sourceByID`, `refreshSources`, `requestScreenCaptureIfNeeded`, and `SourceCatalogTransfer`.
 
 Add:
 
@@ -425,22 +466,31 @@ public init(sourcePicker: SystemCaptureSourcePicker = SystemCaptureSourcePicker(
 }
 ```
 
-Implement `chooseSource(...)` so `.selected(source)` atomically stores the exact `CallCaptureSource`, sets `screenCaptureState = .authorized`, and returns its `HostSourceItem`; cancellation and failure preserve an existing selected source.
+Implement `chooseSource(...)` so `.selected(source)` atomically stores the exact `CallCaptureSource`, sets `screenCaptureState = .authorized`, and returns `HostSourceItem(id: source.id, kind: source.kind, title: source.title)`. Cancellation/failure preserves any previous selected source.
 
 Change `requestPermissions()` to sequence only `requestMicrophoneIfNeeded` then `requestSpeechIfNeeded`, then return `currentPermissionSnapshot()`.
 
-Change `start` to the new no-ID signature and guard `selectedSource` before constructing the unchanged `PrivateHUDWindowController`/`LiveCallHUDSession`; call `session.start(source: source, localeIdentifier: "en-US")` exactly as today. Update `sourceUnavailable` copy to instruct the user to choose a source instead of refreshing sources.
+Change `start` to the new no-ID signature, guard `selectedSource`, and keep existing HUD/session creation. It must call:
 
-- [ ] **Step 2: Replace the custom picker UI.**
+```swift
+session.start(source: source, localeIdentifier: "en-US") { result in
+    // existing success/failure state handling
+}
+```
 
-Remove `import AppKit` if unused, the custom SwiftUI `Picker`, `Refresh Sources`, the Screen Recording Settings button, `openScreenRecordingSettings()`, and `blocksRefresh`.
+Update `sourceUnavailable` text to instruct the user to choose a source rather than refresh sources.
 
-Permissions section:
-- label the row `Screen Capture (session)`;
-- keep Microphone, Speech, System Audio rows;
-- helper copy becomes: `Grant Required Permissions requests Microphone and Speech. Screen content is selected separately through the macOS system picker.`
+- [ ] **Step 2: Replace the custom source UI.**
 
-Capture source section:
+Remove `import AppKit` if unused, the custom SwiftUI `Picker`, `Refresh Sources`, the Screen Recording Settings action, `openScreenRecordingSettings()`, and `blocksRefresh`.
+
+Permissions section labels Screen Capture as `Screen Capture (session)` and uses helper copy:
+
+```text
+Grant Required Permissions requests Microphone and Speech. Screen content is selected separately through the macOS system picker.
+```
+
+Capture source UI:
 
 ```swift
 HStack {
@@ -470,7 +520,7 @@ HStack {
 
 Add `.choosingSource` display text `"choosing source"`; include it in `blocksPermissionGrant`, `blocksSourceChoice`, and `blocksStart`.
 
-- [ ] **Step 3: Run focused and compile verification.**
+- [ ] **Step 3: Run focused/compile GREEN and commit.**
 
 ```bash
 xcrun swift test --filter HostViewModelTests
@@ -478,9 +528,7 @@ xcrun swift build --product SFCallHost
 xcrun swift build --target SFCallMac
 ```
 
-Require all exit 0.
-
-- [ ] **Step 4: Commit.**
+Require all PASS, then:
 
 ```bash
 git add Sources/SFCallHostSupport/LiveHostRuntimeDriver.swift \
@@ -520,7 +568,7 @@ grep -Ei 'sendable|actor-isolat|data race|data-race' \
 
 Any new Swift concurrency diagnostic fails this task.
 
-- [ ] **Step 2: Verify the bounded implementation compare.**
+- [ ] **Step 2: Verify bounded implementation compare.**
 
 From the implementation base containing this plan, implementation changes may touch only:
 
@@ -546,10 +594,10 @@ Do not run `tccutil`, edit TCC, or require `CGPreflightScreenCaptureAccess()` to
 
 In the UI:
 1. Confirm Choose Source is enabled even though the legacy host previously reported blanket Screen Capture denied.
-2. Click `Choose Source…` and require Apple’s system content picker to appear.
+2. Click `Choose Source…`; require Apple’s system content picker to appear.
 3. Select one application or one window.
-4. Require Selected source to become non-`None`, `Screen Capture (session)` to show `authorized`, and Start to enable.
-5. Cancel must not become a failure and must preserve an existing prior selection.
+4. Require Selected source non-`None`, `Screen Capture (session) == authorized`, and Start enabled.
+5. Cancellation must not become a failure and must preserve an existing selection.
 6. If the system picker itself fails, stop and record the exact ScreenCaptureKit error; do not add a legacy enumeration fallback.
 
 - [ ] **Step 4: Run real dual-audio/STT acceptance.**

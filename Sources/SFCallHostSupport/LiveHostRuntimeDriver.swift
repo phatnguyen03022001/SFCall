@@ -27,7 +27,11 @@ public final class LiveHostRuntimeDriver: HostRuntimeDriving {
         if let historyStore {
             self.historyResult = .success(historyStore)
         } else {
-            self.historyResult = Result { try HostCallHistoryStore() }
+            do {
+                self.historyResult = .success(try HostCallHistoryStore())
+            } catch {
+                self.historyResult = .failure(error)
+            }
         }
     }
 
@@ -56,6 +60,10 @@ public final class LiveHostRuntimeDriver: HostRuntimeDriving {
                 completion(self.currentPermissionSnapshot())
             }
         }
+    }
+
+    public func currentPermissions() -> HostPermissionSnapshot {
+        currentPermissionSnapshot()
     }
 
     public func intelligenceState() -> HostIntelligenceState {

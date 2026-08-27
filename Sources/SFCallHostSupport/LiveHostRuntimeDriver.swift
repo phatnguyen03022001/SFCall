@@ -1,5 +1,6 @@
 #if os(macOS)
 import AVFoundation
+import CoreGraphics
 import Foundation
 import SFCallCore
 import SFCallMac
@@ -54,11 +55,14 @@ public final class LiveHostRuntimeDriver: HostRuntimeDriving {
     public func requestPermissions(
         completion: @escaping @MainActor (HostPermissionSnapshot) -> Void
     ) {
-        requestMicrophoneIfNeeded { [weak self] in
+        requestScreenCaptureIfNeeded { [weak self] in
             guard let self else { return }
-            self.requestSpeechIfNeeded { [weak self] in
+            self.requestMicrophoneIfNeeded { [weak self] in
                 guard let self else { return }
-                completion(self.currentPermissionSnapshot())
+                self.requestSpeechIfNeeded { [weak self] in
+                    guard let self else { return }
+                    completion(self.currentPermissionSnapshot())
+                }
             }
         }
     }
@@ -109,6 +113,19 @@ public final class LiveHostRuntimeDriver: HostRuntimeDriving {
         activeSession.stop()
         self.activeSession = nil
         activeHUD = nil
+    }
+
+    private func requestScreenCaptureIfNeeded(
+        completion: @escaping @MainActor () -> Void
+    ) {
+        if CGPreflightScreenCaptureAccess() {
+            screenCaptureState = .authorized
+            completion()
+            return
+        }
+
+        screenCaptureState = CGRequestScreenCaptureAccess() ? .authorized : .denied
+        completion()
     }
 
     private func requestMicrophoneIfNeeded(

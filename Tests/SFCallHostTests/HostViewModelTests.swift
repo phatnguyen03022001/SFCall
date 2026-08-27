@@ -70,6 +70,37 @@ final class HostViewModelTests: XCTestCase {
     }
 
     @MainActor
+    func testSourceEnumerationIsUnavailableWithoutScreenCapturePermission() {
+        let driver = FakeHostRuntimeDriver()
+        driver.permissionSnapshot = HostPermissionSnapshot(
+            microphone: .authorized,
+            speech: .authorized,
+            screenCapture: .denied,
+            systemAudio: .notDetermined
+        )
+        let model = HostViewModel(driver: driver)
+        model.grantRequiredPermissions()
+
+        XCTAssertFalse(model.canEnumerateSources)
+        XCTAssertEqual(model.sourcePermissionMessage, "Source enumeration requires Screen Capture permission.")
+    }
+
+    @MainActor
+    func testDeniedScreenCaptureShowsSettingsAffordance() {
+        let driver = FakeHostRuntimeDriver()
+        driver.permissionSnapshot = HostPermissionSnapshot(
+            microphone: .authorized,
+            speech: .authorized,
+            screenCapture: .denied,
+            systemAudio: .notDetermined
+        )
+        let model = HostViewModel(driver: driver)
+        model.grantRequiredPermissions()
+
+        XCTAssertTrue(model.shouldShowScreenCaptureSettings)
+    }
+
+    @MainActor
     func testStartWithoutSelectionDoesNotRequestPermissionsOrRuntime() {
         let driver = FakeHostRuntimeDriver()
         let model = HostViewModel(driver: driver)

@@ -18,6 +18,18 @@ public final class HostViewModel: ObservableObject {
         self.driver = driver
     }
 
+    public var canEnumerateSources: Bool {
+        permissions.screenCapture == .authorized
+    }
+
+    public var shouldShowScreenCaptureSettings: Bool {
+        permissions.screenCapture == .denied
+    }
+
+    public var sourcePermissionMessage: String? {
+        canEnumerateSources ? nil : "Source enumeration requires Screen Capture permission."
+    }
+
     public func refreshSources() {
         guard !isBusyOrRunning else { return }
         status = .refreshingSources

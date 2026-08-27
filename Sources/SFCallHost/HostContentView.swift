@@ -1,4 +1,5 @@
 #if os(macOS)
+import AppKit
 import SFCallHostSupport
 import SFCallMac
 import SwiftUI
@@ -57,12 +58,25 @@ struct HostContentView: View {
                         }
                     }
                     .pickerStyle(.menu)
+                    .disabled(!model.canEnumerateSources)
+
+                    if let message = model.sourcePermissionMessage {
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if model.shouldShowScreenCaptureSettings {
+                        Button("Open Screen Recording Settings") {
+                            openScreenRecordingSettings()
+                        }
+                    }
 
                     HStack {
                         Button("Refresh Sources") {
                             model.refreshSources()
                         }
-                        .disabled(model.status.blocksRefresh)
+                        .disabled(!model.canEnumerateSources || model.status.blocksRefresh)
 
                         Button("Start") {
                             model.start()
@@ -102,6 +116,13 @@ struct HostContentView: View {
             Text(state.rawValue)
                 .font(.system(.body, design: .monospaced))
         }
+    }
+
+    private func openScreenRecordingSettings() {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") else {
+            return
+        }
+        NSWorkspace.shared.open(url)
     }
 }
 

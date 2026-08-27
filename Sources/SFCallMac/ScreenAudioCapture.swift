@@ -3,11 +3,16 @@ import CoreMedia
 import Foundation
 import ScreenCaptureKit
 
+public enum ScreenAudioCaptureError: Error {
+    case startSuperseded
+}
+
 public final class ScreenAudioCapture: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     private let outputQueue = DispatchQueue(label: "SFCall.ScreenAudioCapture")
     private let stateLock = NSLock()
     private var stream: SCStream?
     private var onAudio: (@Sendable (CMSampleBuffer) -> Void)?
+    private var pendingFilter: (id: UUID, filter: SCContentFilter)?
 
     public override init() {
         super.init()
@@ -18,10 +23,14 @@ public final class ScreenAudioCapture: NSObject, SCStreamOutput, SCStreamDelegat
         onAudio: @escaping @Sendable (CMSampleBuffer) -> Void,
         completion: @escaping @Sendable (Error?) -> Void
     ) {
-        let filter = source.filter
+        let startID = stageFilter(source.filter)
 
         stop { [weak self] in
             guard let self else { return }
+            guard let filter = self.takeStagedFilter(id: startID) else {
+                completion(ScreenAudioCaptureError.startSuperseded)
+                return
+            }
 
             let configuration = SCStreamConfiguration()
             configuration.capturesAudio = true
@@ -65,6 +74,22 @@ public final class ScreenAudioCapture: NSObject, SCStreamOutput, SCStreamDelegat
     ) {
         guard outputType == .audio, sampleBuffer.isValid else { return }
         currentAudioHandler()?(sampleBuffer)
+    }
+
+    private func stageFilter(_ filter: SCContentFilter) -> UUID {
+        let id = UUID()
+        stateLock.lock()
+        pendingFilter = (id: id, filter: filter)
+        stateLock.unlock()
+        return id
+    }
+
+    private func takeStagedFilter(id: UUID) -> SCContentFilter? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard let pendingFilter, pendingFilter.id == id else { return nil }
+        self.pendingFilter = nil
+        return pendingFilter.filter
     }
 
     private func setState(

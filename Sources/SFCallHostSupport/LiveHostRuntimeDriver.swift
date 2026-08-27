@@ -1,6 +1,5 @@
 #if os(macOS)
 import AVFoundation
-import CoreGraphics
 import Foundation
 import SFCallCore
 import SFCallMac
@@ -8,62 +7,69 @@ import Speech
 
 @MainActor
 public final class LiveHostRuntimeDriver: HostRuntimeDriving {
-    private let catalog: ScreenCaptureSourceCatalog
-    private var sourceByID: [String: CallCaptureSource] = [:]
+    private let catalog: AudioProcessSourceCatalog
+    private let advisor: any NegotiationAdviceProvider
+    private let historyResult: Result<HostCallHistoryStore, Error>
+
+    private var sourceByID: [String: AudioProcessSource] = [:]
     private var activeSession: LiveCallHUDSession?
     private var activeHUD: PrivateHUDWindowController?
-    private var screenCaptureState: HostPermissionState = .notDetermined
     private var systemAudioState: HostPermissionState = .notDetermined
+    private var adviceGeneration = 0
 
-    public init(catalog: ScreenCaptureSourceCatalog = ScreenCaptureSourceCatalog()) {
+    public init(
+        catalog: AudioProcessSourceCatalog = AudioProcessSourceCatalog(),
+        advisor: any NegotiationAdviceProvider = AppleNegotiationAdvisor(),
+        historyStore: HostCallHistoryStore? = nil
+    ) {
         self.catalog = catalog
+        self.advisor = advisor
+        if let historyStore {
+            self.historyResult = .success(historyStore)
+        } else {
+            self.historyResult = Result { try HostCallHistoryStore() }
+        }
     }
 
-    public func refreshSources(
-        completion: @escaping @MainActor (Result<[HostSourceItem], Error>) -> Void
+    public func refreshAudioSources(
+        completion: @escaping @MainActor (Result<[HostAudioSourceItem], Error>) -> Void
     ) {
-        let transfer = SourceCatalogTransfer { [weak self] result in
-            guard let self else { return }
-
-            switch result {
-            case .success(let sources):
-                var byID: [String: CallCaptureSource] = [:]
-                for source in sources {
-                    byID[source.id] = source
-                }
-                self.sourceByID = byID
-                self.screenCaptureState = .authorized
-                completion(
-                    .success(
-                        sources.map {
-                            HostSourceItem(id: $0.id, kind: $0.kind, title: $0.title)
-                        }
-                    )
-                )
-
-            case .failure(let error):
-                self.sourceByID = [:]
-                completion(.failure(error))
-            }
-        }
-
-        catalog.load { result in
-            transfer.submit(result)
+        do {
+            let sources = try catalog.load()
+            sourceByID = Dictionary(
+                uniqueKeysWithValues: sources.map { (String($0.id), $0) }
+            )
+            completion(.success(sources.map(Self.presentationItem)))
+        } catch {
+            sourceByID = [:]
+            completion(.failure(error))
         }
     }
 
     public func requestPermissions(
         completion: @escaping @MainActor (HostPermissionSnapshot) -> Void
     ) {
-        requestScreenCaptureIfNeeded { [weak self] in
+        requestMicrophoneIfNeeded { [weak self] in
             guard let self else { return }
-            self.requestMicrophoneIfNeeded { [weak self] in
+            self.requestSpeechIfNeeded { [weak self] in
                 guard let self else { return }
-                self.requestSpeechIfNeeded { [weak self] in
-                    guard let self else { return }
-                    completion(self.currentPermissionSnapshot())
-                }
+                completion(self.currentPermissionSnapshot())
             }
+        }
+    }
+
+    public func intelligenceState() -> HostIntelligenceState {
+        switch AppleNegotiationAdvisor.availability {
+        case .available:
+            .available
+        case .appleIntelligenceNotEnabled:
+            .appleIntelligenceDisabled
+        case .modelNotReady:
+            .modelNotReady
+        case .deviceNotEligible:
+            .deviceNotEligible
+        case .unavailable:
+            .unavailable
         }
     }
 
@@ -81,51 +87,85 @@ public final class LiveHostRuntimeDriver: HostRuntimeDriving {
             return
         }
 
+        let historyStore: HostCallHistoryStore
+        switch historyResult {
+        case .success(let store):
+            historyStore = store
+        case .failure(let error):
+            completion(.failure(HostRuntimeDriverError.historyUnavailable(error.localizedDescription)))
+            return
+        }
+
+        let prepared: HostPreparedCallSession
+        do {
+            prepared = try historyStore.prepareSession()
+        } catch {
+            completion(.failure(HostRuntimeDriverError.historyUnavailable(error.localizedDescription)))
+            return
+        }
+
         let hud = PrivateHUDWindowController()
+        let sessionID = prepared.session.id
         let session = LiveCallHUDSession(
-            baseline: CaseBaseline(version: 0, requirements: []),
-            clientFacts: [],
+            baseline: prepared.baseline,
+            clientFacts: prepared.clientFacts,
             hud: hud,
-            onResponseRequest: onResponseRequest
+            onResponseRequest: { [weak self] request in
+                guard let self else { return }
+                onResponseRequest(request)
+                self.analyzeLatest(request)
+            },
+            onTranscriptTurn: { speaker, text, isFinal in
+                guard isFinal else { return }
+                try? historyStore.appendTranscriptTurn(
+                    sessionID: sessionID,
+                    speaker: speaker,
+                    text: text,
+                    isFinal: true
+                )
+            }
         )
 
+        activeHUD = hud
+        activeSession = session
         session.start(source: source, localeIdentifier: "en-US") { [weak self] result in
             guard let self else { return }
-
             switch result {
             case .success:
-                self.activeHUD = hud
-                self.activeSession = session
-                self.screenCaptureState = .authorized
                 self.systemAudioState = .authorized
                 completion(.success(()))
-
             case .failure(let error):
-                self.activeHUD = nil
                 self.activeSession = nil
+                self.activeHUD = nil
                 completion(.failure(error))
             }
         }
     }
 
     public func stop() {
-        guard let activeSession else { return }
-        activeSession.stop()
-        self.activeSession = nil
+        adviceGeneration += 1
+        activeSession?.stop()
+        activeSession = nil
         activeHUD = nil
     }
 
-    private func requestScreenCaptureIfNeeded(
-        completion: @escaping @MainActor () -> Void
-    ) {
-        if CGPreflightScreenCaptureAccess() {
-            screenCaptureState = .authorized
-            completion()
-            return
-        }
+    private func analyzeLatest(_ request: ResponseRequest) {
+        adviceGeneration += 1
+        let generation = adviceGeneration
 
-        screenCaptureState = CGRequestScreenCaptureAccess() ? .authorized : .denied
-        completion()
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let advice = try await self.advisor.advise(for: request)
+                guard self.adviceGeneration == generation,
+                      let session = self.activeSession else { return }
+                session.applyNegotiationAdvice(advice)
+            } catch {
+                guard self.adviceGeneration == generation,
+                      let session = self.activeSession else { return }
+                session.applyNegotiationFailure(Self.message(for: error))
+            }
+        }
     }
 
     private func requestMicrophoneIfNeeded(
@@ -134,9 +174,7 @@ public final class LiveHostRuntimeDriver: HostRuntimeDriving {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .audio) { _ in
-                Task { @MainActor in
-                    completion()
-                }
+                Task { @MainActor in completion() }
             }
         case .authorized, .denied, .restricted:
             completion()
@@ -152,11 +190,8 @@ public final class LiveHostRuntimeDriver: HostRuntimeDriving {
             completion()
             return
         }
-
         AppleSpeechTranscriber.requestAuthorization { _ in
-            Task { @MainActor in
-                completion()
-            }
+            Task { @MainActor in completion() }
         }
     }
 
@@ -168,93 +203,62 @@ public final class LiveHostRuntimeDriver: HostRuntimeDriving {
             speech: Self.mapSpeechStatus(
                 SFSpeechRecognizer.authorizationStatus()
             ),
-            screenCapture: screenCaptureState,
             systemAudio: systemAudioState
         )
     }
 
-    private static func mapMicrophoneStatus(
-        _ status: AVAuthorizationStatus
-    ) -> HostPermissionState {
+    private static func presentationItem(_ source: AudioProcessSource) -> HostAudioSourceItem {
+        HostAudioSourceItem(
+            id: String(source.id),
+            title: source.title,
+            bundleID: source.bundleID,
+            isRunningOutput: source.isRunningOutput
+        )
+    }
+
+    private static func mapMicrophoneStatus(_ status: AVAuthorizationStatus) -> HostPermissionState {
         switch status {
-        case .notDetermined:
-            .notDetermined
-        case .authorized:
-            .authorized
-        case .denied:
-            .denied
-        case .restricted:
-            .restricted
-        @unknown default:
-            .unavailable
+        case .notDetermined: .notDetermined
+        case .authorized: .authorized
+        case .denied: .denied
+        case .restricted: .restricted
+        @unknown default: .unavailable
         }
     }
 
-    private static func mapSpeechStatus(
-        _ status: SFSpeechRecognizerAuthorizationStatus
-    ) -> HostPermissionState {
+    private static func mapSpeechStatus(_ status: SFSpeechRecognizerAuthorizationStatus) -> HostPermissionState {
         switch status {
-        case .notDetermined:
-            .notDetermined
-        case .authorized:
-            .authorized
-        case .denied:
-            .denied
-        case .restricted:
-            .restricted
-        @unknown default:
-            .unavailable
+        case .notDetermined: .notDetermined
+        case .authorized: .authorized
+        case .denied: .denied
+        case .restricted: .restricted
+        @unknown default: .unavailable
         }
+    }
+
+    private static func message(for error: Error) -> String {
+        if let localized = error as? LocalizedError,
+           let description = localized.errorDescription,
+           !description.isEmpty {
+            return description
+        }
+        return error.localizedDescription
     }
 }
 
 private enum HostRuntimeDriverError: LocalizedError, Sendable {
     case sourceUnavailable
     case runtimeAlreadyActive
+    case historyUnavailable(String)
 
     var errorDescription: String? {
         switch self {
         case .sourceUnavailable:
-            "The selected capture source is no longer available. Refresh sources and try again."
+            "The selected audio process is no longer available. Refresh Audio Processes and try again."
         case .runtimeAlreadyActive:
             "A live SFCall runtime is already active."
-        }
-    }
-}
-
-private final class SourceCatalogTransfer: @unchecked Sendable {
-    private let lock = NSLock()
-    private var pending: Result<[CallCaptureSource], Error>?
-    private let handler: @MainActor (Result<[CallCaptureSource], Error>) -> Void
-
-    @MainActor
-    init(
-        handler: @escaping @MainActor (Result<[CallCaptureSource], Error>) -> Void
-    ) {
-        self.handler = handler
-    }
-
-    func submit(_ result: Result<[CallCaptureSource], Error>) {
-        lock.lock()
-        pending = result
-        lock.unlock()
-
-        DispatchQueue.main.async { [self] in
-            MainActor.assumeIsolated {
-                drain()
-            }
-        }
-    }
-
-    @MainActor
-    private func drain() {
-        lock.lock()
-        let result = pending
-        pending = nil
-        lock.unlock()
-
-        if let result {
-            handler(result)
+        case .historyUnavailable(let message):
+            "Local call history is unavailable — \(message)"
         }
     }
 }

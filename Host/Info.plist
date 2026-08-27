@@ -21,16 +21,14 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>26.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSMicrophoneUsageDescription</key>
     <string>SFCall uses the microphone to transcribe your side of a live call locally.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>SFCall uses speech recognition to transcribe live call audio for the private HUD.</string>
-    <key>NSScreenCaptureUsageDescription</key>
-    <string>SFCall captures only the application or window you select so it can transcribe the remote side of a live call.</string>
+    <string>SFCall uses on-device speech recognition to transcribe both sides of a live call.</string>
     <key>NSAudioCaptureUsageDescription</key>
-    <string>SFCall captures system audio from the selected call source so it can transcribe the remote speaker.</string>
+    <string>SFCall captures outgoing audio from the call process you select so it can transcribe the remote speaker locally.</string>
 </dict>
 </plist>

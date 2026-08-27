@@ -16,12 +16,11 @@ final class LiveCallPresentationCoordinatorTests: XCTestCase {
         )
 
         XCTAssertEqual(update.hud.clientTranscript, "Can we launch Friday?")
-        XCTAssertEqual(update.hud.sayThis, "")
-        XCTAssertEqual(update.hud.vietnameseHint, "")
+        XCTAssertEqual(update.hud.analysisState, .idle)
         XCTAssertNil(update.responseRequest)
     }
 
-    func testRemoteFinalProducesResponseRequestAndThinkingHint() throws {
+    func testRemoteFinalProducesResponseRequestAndAnalyzingState() throws {
         let fixture = makeFixture()
         let coordinator = LiveCallPresentationCoordinator(
             baseline: fixture.baseline,
@@ -38,28 +37,81 @@ final class LiveCallPresentationCoordinatorTests: XCTestCase {
         XCTAssertEqual(request.confirmedRequirements, ["Launch after approval"])
         XCTAssertEqual(request.clientFacts, ["Prefers concise updates"])
         XCTAssertEqual(update.hud.clientTranscript, "Can we launch Friday?")
+        XCTAssertEqual(update.hud.analysisState, .analyzing)
         XCTAssertEqual(update.hud.sayThis, "")
-        XCTAssertEqual(update.hud.vietnameseHint, "Đang chuẩn bị câu trả lời…")
     }
 
-    func testMicrophoneFinalNeverProducesResponseRequestOrOverwritesClientTranscript() {
+    func testApplyingAdviceFillsVietnameseRiskMoveAndReply() {
         let fixture = makeFixture()
         let coordinator = LiveCallPresentationCoordinator(
             baseline: fixture.baseline,
             clientFacts: fixture.clientFacts
         )
-
         _ = coordinator.ingestRemote(
-            AppleSpeechTranscript(text: "What is the timeline?", isFinal: false)
+            AppleSpeechTranscript(text: "Commit to Friday now.", isFinal: true)
         )
+
+        let hud = coordinator.applyNegotiationAdvice(makeAdvice())
+
+        XCTAssertEqual(hud.clientTranslationVietnamese, "Hãy cam kết giao vào thứ Sáu ngay.")
+        XCTAssertEqual(hud.riskLevel, .high)
+        XCTAssertTrue(hud.trapDetected)
+        XCTAssertEqual(hud.confidencePercent, 91)
+        XCTAssertEqual(hud.riskReasonVietnamese, "Họ đang yêu cầu cam kết trước khi chốt phạm vi.")
+        XCTAssertEqual(hud.recommendedMoveVietnamese, "Chốt phạm vi trước khi xác nhận thời hạn.")
+        XCTAssertEqual(hud.sayThis, "Let me confirm the scope first. Then I can confirm the timeline.")
+        XCTAssertEqual(hud.vietnameseHint, "Để tôi xác nhận phạm vi trước. Sau đó tôi có thể xác nhận tiến độ.")
+        XCTAssertEqual(hud.analysisState, .ready)
+    }
+
+    func testMicrophoneTurnDoesNotClearCurrentAdvice() {
+        let fixture = makeFixture()
+        let coordinator = LiveCallPresentationCoordinator(
+            baseline: fixture.baseline,
+            clientFacts: fixture.clientFacts
+        )
+        _ = coordinator.ingestRemote(
+            AppleSpeechTranscript(text: "Commit to Friday now.", isFinal: true)
+        )
+        _ = coordinator.applyNegotiationAdvice(makeAdvice())
+
         let update = coordinator.ingestMicrophone(
-            AppleSpeechTranscript(text: "Let me check that.", isFinal: true)
+            AppleSpeechTranscript(text: "Let me confirm the scope first.", isFinal: true)
         )
 
         XCTAssertNil(update.responseRequest)
-        XCTAssertEqual(update.hud.clientTranscript, "What is the timeline?")
-        XCTAssertEqual(update.hud.sayThis, "")
-        XCTAssertEqual(update.hud.vietnameseHint, "")
+        XCTAssertEqual(update.hud.clientTranscript, "Commit to Friday now.")
+        XCTAssertEqual(update.hud.analysisState, .ready)
+        XCTAssertEqual(update.hud.sayThis, "Let me confirm the scope first. Then I can confirm the timeline.")
+    }
+
+    func testAdviceFailureDoesNotLoseClientTranscript() {
+        let fixture = makeFixture()
+        let coordinator = LiveCallPresentationCoordinator(
+            baseline: fixture.baseline,
+            clientFacts: fixture.clientFacts
+        )
+        _ = coordinator.ingestRemote(
+            AppleSpeechTranscript(text: "What is your final price?", isFinal: true)
+        )
+
+        let hud = coordinator.applyNegotiationFailure("Apple Intelligence is unavailable.")
+
+        XCTAssertEqual(hud.clientTranscript, "What is your final price?")
+        XCTAssertEqual(hud.analysisState, .unavailable("Apple Intelligence is unavailable."))
+    }
+
+    private func makeAdvice() -> NegotiationAdvice {
+        NegotiationAdvice(
+            translatedClientTextVietnamese: "Hãy cam kết giao vào thứ Sáu ngay.",
+            trapDetected: true,
+            riskLevel: .high,
+            riskReasonVietnamese: "Họ đang yêu cầu cam kết trước khi chốt phạm vi.",
+            recommendedMoveVietnamese: "Chốt phạm vi trước khi xác nhận thời hạn.",
+            replyEnglish: "Let me confirm the scope first. Then I can confirm the timeline.",
+            replyVietnamese: "Để tôi xác nhận phạm vi trước. Sau đó tôi có thể xác nhận tiến độ.",
+            confidencePercent: 91
+        )
     }
 
     private func makeFixture() -> (baseline: CaseBaseline, clientFacts: [ClientFactRecord]) {
@@ -78,10 +130,7 @@ final class LiveCallPresentationCoordinatorTests: XCTestCase {
             value: "Prefers concise updates",
             evidenceRefs: ["message:1"]
         )
-        return (
-            CaseBaseline(version: 3, requirements: [requirement]),
-            [fact]
-        )
+        return (CaseBaseline(version: 3, requirements: [requirement]), [fact])
     }
 }
 #endif

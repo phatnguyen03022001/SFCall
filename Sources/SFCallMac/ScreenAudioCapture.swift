@@ -18,6 +18,8 @@ public final class ScreenAudioCapture: NSObject, SCStreamOutput, SCStreamDelegat
         onAudio: @escaping @Sendable (CMSampleBuffer) -> Void,
         completion: @escaping @Sendable (Error?) -> Void
     ) {
+        let filter = source.filter
+
         stop { [weak self] in
             guard let self else { return }
 
@@ -31,7 +33,7 @@ public final class ScreenAudioCapture: NSObject, SCStreamOutput, SCStreamDelegat
             configuration.minimumFrameInterval = CMTime(value: 1, timescale: 2)
             configuration.queueDepth = 3
 
-            let stream = SCStream(filter: source.filter, configuration: configuration, delegate: self)
+            let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
             do {
                 try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: outputQueue)
                 self.setState(stream: stream, onAudio: onAudio)

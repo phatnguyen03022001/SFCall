@@ -1,13 +1,12 @@
 #if os(macOS)
 import AVFoundation
-import CoreMedia
 import XCTest
 import SFCallCore
 @testable import SFCallMac
 
 final class LiveCallHUDSessionTests: XCTestCase {
     @MainActor
-    func testSuccessfulRuntimeShowsHUDRoutesRemoteTranscriptAndHidesOnStop() async throws {
+    func testSuccessfulRuntimeShowsHUDRoutesTranscriptEventsAndAdvice() async throws {
         let fixture = makeFixture()
         let hud = FakeHUDPresenter()
         let remoteAudio = FakeHUDRemoteAudioSource()
@@ -22,12 +21,20 @@ final class LiveCallHUDSessionTests: XCTestCase {
         )
         var startResult: Result<Void, Error>?
         var requests: [ResponseRequest] = []
+        var speakers: [TranscriptSpeaker] = []
+        var texts: [String] = []
+        var finals: [Bool] = []
 
         let session = LiveCallHUDSession(
             baseline: fixture.baseline,
             clientFacts: fixture.clientFacts,
             hud: hud,
-            onResponseRequest: { requests.append($0) }
+            onResponseRequest: { requests.append($0) },
+            onTranscriptTurn: { speaker, text, isFinal in
+                speakers.append(speaker)
+                texts.append(text)
+                finals.append(isFinal)
+            }
         )
 
         session.start(runtime: runtime) { startResult = $0 }
@@ -36,14 +43,51 @@ final class LiveCallHUDSessionTests: XCTestCase {
         XCTAssertEqual(hud.showCount, 1)
 
         remoteSpeech.emit(AppleSpeechTranscript(text: "Can we ship Friday?", isFinal: true))
+        microphoneSpeech.emit(AppleSpeechTranscript(text: "Let me check.", isFinal: true))
         await Task.yield()
 
         XCTAssertEqual(hud.updates.last?.clientTranscript, "Can we ship Friday?")
-        XCTAssertEqual(hud.updates.last?.vietnameseHint, "Đang chuẩn bị câu trả lời…")
+        XCTAssertEqual(hud.updates.last?.analysisState, .analyzing)
         XCTAssertEqual(requests.map(\.clientSaid), ["Can we ship Friday?"])
+        XCTAssertEqual(speakers, [.client, .user])
+        XCTAssertEqual(texts, ["Can we ship Friday?", "Let me check."])
+        XCTAssertEqual(finals, [true, true])
+
+        session.applyNegotiationAdvice(
+            NegotiationAdvice(
+                translatedClientTextVietnamese: "Chúng ta có thể giao vào thứ Sáu không?",
+                trapDetected: false,
+                riskLevel: .medium,
+                riskReasonVietnamese: "Cần xác nhận phạm vi trước.",
+                recommendedMoveVietnamese: "Làm rõ phạm vi.",
+                replyEnglish: "Let me confirm the scope first.",
+                replyVietnamese: "Để tôi xác nhận phạm vi trước.",
+                confidencePercent: 80
+            )
+        )
+        XCTAssertEqual(hud.updates.last?.analysisState, .ready)
+        XCTAssertEqual(hud.updates.last?.sayThis, "Let me confirm the scope first.")
 
         session.stop()
         XCTAssertEqual(hud.hideCount, 1)
+    }
+
+    @MainActor
+    func testAdviceFailureUpdatesHUDWithoutStoppingSession() {
+        let fixture = makeFixture()
+        let hud = FakeHUDPresenter()
+        let session = LiveCallHUDSession(
+            baseline: fixture.baseline,
+            clientFacts: fixture.clientFacts,
+            hud: hud,
+            onResponseRequest: { _ in },
+            onTranscriptTurn: { _, _, _ in }
+        )
+
+        session.applyNegotiationFailure("Apple Intelligence is unavailable.")
+
+        XCTAssertEqual(hud.updates.last?.analysisState, .unavailable("Apple Intelligence is unavailable."))
+        XCTAssertEqual(hud.hideCount, 0)
     }
 
     @MainActor
@@ -62,7 +106,8 @@ final class LiveCallHUDSessionTests: XCTestCase {
             baseline: fixture.baseline,
             clientFacts: fixture.clientFacts,
             hud: hud,
-            onResponseRequest: { _ in }
+            onResponseRequest: { _ in },
+            onTranscriptTurn: { _, _, _ in }
         )
 
         session.start(runtime: runtime) { result = $0 }
@@ -73,17 +118,18 @@ final class LiveCallHUDSessionTests: XCTestCase {
     }
 
     @MainActor
-    func testNativeStartConvenienceSignatureExists() {
+    func testNativeStartConvenienceUsesAudioProcessSource() {
         let fixture = makeFixture()
         let session = LiveCallHUDSession(
             baseline: fixture.baseline,
             clientFacts: fixture.clientFacts,
             hud: FakeHUDPresenter(),
-            onResponseRequest: { _ in }
+            onResponseRequest: { _ in },
+            onTranscriptTurn: { _, _, _ in }
         )
 
         let start: (
-            CallCaptureSource,
+            AudioProcessSource,
             String,
             @escaping (Result<Void, Error>) -> Void
         ) -> Void = session.start(source:localeIdentifier:completion:)
@@ -107,10 +153,7 @@ final class LiveCallHUDSessionTests: XCTestCase {
             value: "Prefers concise updates",
             evidenceRefs: ["message:1"]
         )
-        return (
-            CaseBaseline(version: 3, requirements: [requirement]),
-            [fact]
-        )
+        return (CaseBaseline(version: 3, requirements: [requirement]), [fact])
     }
 }
 
@@ -124,62 +167,36 @@ private final class FakeHUDPresenter: LiveCallHUDPresenting {
     private(set) var hideCount = 0
     private(set) var updates: [PrivateHUDContent] = []
 
-    func show() {
-        showCount += 1
-    }
-
-    func hide() {
-        hideCount += 1
-    }
-
-    func update(_ content: PrivateHUDContent) {
-        updates.append(content)
-    }
+    func show() { showCount += 1 }
+    func hide() { hideCount += 1 }
+    func update(_ content: PrivateHUDContent) { updates.append(content) }
 }
 
 private final class FakeHUDRemoteAudioSource: LiveCallRemoteAudioSource, @unchecked Sendable {
     func start(
-        onAudio: @escaping @Sendable (CMSampleBuffer) -> Void,
+        onAudio: @escaping (AVAudioPCMBuffer) -> Void,
         completion: @escaping @Sendable (Error?) -> Void
     ) {
         completion(nil)
     }
 
-    func stop(completion: (@Sendable () -> Void)?) {
-        completion?()
-    }
+    func stop(completion: (@Sendable () -> Void)?) { completion?() }
 }
 
 private final class FakeHUDMicrophoneAudioSource: LiveCallMicrophoneAudioSource {
     private let startError: Error?
-
-    init(startError: Error? = nil) {
-        self.startError = startError
-    }
-
+    init(startError: Error? = nil) { self.startError = startError }
     func start(onBuffer: @escaping (AVAudioPCMBuffer) -> Void) throws {
         if let startError { throw startError }
     }
-
     func stop() {}
 }
 
 private final class FakeHUDSpeechTranscriber: LiveCallSpeechTranscribing {
     private var onTranscript: ((AppleSpeechTranscript) -> Void)?
-
-    func start(onTranscript: @escaping (AppleSpeechTranscript) -> Void) throws {
-        self.onTranscript = onTranscript
-    }
-
-    func append(sampleBuffer: CMSampleBuffer) {}
+    func start(onTranscript: @escaping (AppleSpeechTranscript) -> Void) throws { self.onTranscript = onTranscript }
     func append(pcmBuffer: AVAudioPCMBuffer) {}
-
-    func stop() {
-        onTranscript = nil
-    }
-
-    func emit(_ transcript: AppleSpeechTranscript) {
-        onTranscript?(transcript)
-    }
+    func stop() { onTranscript = nil }
+    func emit(_ transcript: AppleSpeechTranscript) { onTranscript?(transcript) }
 }
 #endif

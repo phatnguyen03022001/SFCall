@@ -29,7 +29,7 @@ public enum ScreenCaptureSourceCatalogError: Error {
 public final class ScreenCaptureSourceCatalog {
     public init() {}
 
-    public func load(completion: @escaping (Result<[CallCaptureSource], Error>) -> Void) {
+    public func load(completion: @escaping @Sendable (Result<[CallCaptureSource], Error>) -> Void) {
         SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: true) { content, error in
             if let error {
                 completion(.failure(error))

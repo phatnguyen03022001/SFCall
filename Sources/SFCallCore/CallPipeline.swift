@@ -85,3 +85,67 @@ public final class CallTurnCoordinator: @unchecked Sendable {
         )
     }
 }
+
+public final class LiveCallRouter: @unchecked Sendable {
+    private let coordinator: CallTurnCoordinator
+    private(set) public var recentTurns: [ConversationTurn] = []
+    private let maxRecentTurns: Int
+
+    public init(maxRecentTurns: Int = 6) {
+        self.maxRecentTurns = max(1, maxRecentTurns)
+        self.coordinator = CallTurnCoordinator(maxRecentTurns: maxRecentTurns)
+    }
+
+    public func ingestRemote(
+        text: String,
+        isFinal: Bool,
+        baseline: CaseBaseline,
+        clientFacts: [ClientFactRecord]
+    ) -> ResponseRequest? {
+        ingest(
+            speaker: .client,
+            text: text,
+            isFinal: isFinal,
+            baseline: baseline,
+            clientFacts: clientFacts
+        )
+    }
+
+    public func ingestMicrophone(
+        text: String,
+        isFinal: Bool,
+        baseline: CaseBaseline,
+        clientFacts: [ClientFactRecord]
+    ) -> ResponseRequest? {
+        ingest(
+            speaker: .user,
+            text: text,
+            isFinal: isFinal,
+            baseline: baseline,
+            clientFacts: clientFacts
+        )
+    }
+
+    private func ingest(
+        speaker: TranscriptSpeaker,
+        text: String,
+        isFinal: Bool,
+        baseline: CaseBaseline,
+        clientFacts: [ClientFactRecord]
+    ) -> ResponseRequest? {
+        if isFinal {
+            recentTurns.append(ConversationTurn(speaker: speaker, text: text))
+            if recentTurns.count > maxRecentTurns {
+                recentTurns.removeFirst(recentTurns.count - maxRecentTurns)
+            }
+        }
+
+        return coordinator.ingest(
+            speaker: speaker,
+            text: text,
+            isFinal: isFinal,
+            baseline: baseline,
+            clientFacts: clientFacts
+        )
+    }
+}

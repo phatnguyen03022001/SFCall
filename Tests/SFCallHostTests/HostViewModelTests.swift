@@ -1,4 +1,5 @@
 #if os(macOS)
+import Foundation
 import XCTest
 import SFCallCore
 import SFCallMac

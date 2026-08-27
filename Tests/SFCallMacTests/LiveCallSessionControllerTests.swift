@@ -4,15 +4,17 @@ import SFCallCore
 @testable import SFCallMac
 
 final class LiveCallSessionControllerTests: XCTestCase {
-    func testRemoteFinalPublishesHUDAndResponseRequest() throws {
+    func testRemoteFinalPublishesHUDResponseAndTranscriptEvent() throws {
         let fixture = makeFixture()
         var hudUpdates: [PrivateHUDContent] = []
         var requests: [ResponseRequest] = []
+        var speakers: [TranscriptSpeaker] = []
         let controller = LiveCallSessionController(
             baseline: fixture.baseline,
             clientFacts: fixture.clientFacts,
             onHUDUpdate: { hudUpdates.append($0) },
-            onResponseRequest: { requests.append($0) }
+            onResponseRequest: { requests.append($0) },
+            onTranscriptTurn: { speaker, _, _ in speakers.append(speaker) }
         )
 
         controller.ingestRemoteTranscript(
@@ -20,9 +22,10 @@ final class LiveCallSessionControllerTests: XCTestCase {
         )
 
         XCTAssertEqual(hudUpdates.last?.clientTranscript, "Can we ship Friday?")
-        XCTAssertEqual(hudUpdates.last?.vietnameseHint, "Đang chuẩn bị câu trả lời…")
+        XCTAssertEqual(hudUpdates.last?.analysisState, .analyzing)
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests.first?.clientSaid, "Can we ship Friday?")
+        XCTAssertEqual(speakers, [.client])
     }
 
     func testMicrophoneFinalPublishesHUDWithoutResponseAndPreservesClientText() {
@@ -44,7 +47,7 @@ final class LiveCallSessionControllerTests: XCTestCase {
         )
 
         XCTAssertEqual(hudUpdates.last?.clientTranscript, "What is the timeline?")
-        XCTAssertEqual(hudUpdates.last?.vietnameseHint, "")
+        XCTAssertEqual(hudUpdates.last?.analysisState, .idle)
         XCTAssertTrue(requests.isEmpty)
     }
 
@@ -64,10 +67,7 @@ final class LiveCallSessionControllerTests: XCTestCase {
             value: "Prefers concise updates",
             evidenceRefs: ["message:1"]
         )
-        return (
-            CaseBaseline(version: 3, requirements: [requirement]),
-            [fact]
-        )
+        return (CaseBaseline(version: 3, requirements: [requirement]), [fact])
     }
 }
 #endif

@@ -94,7 +94,7 @@ public final class CoreAudioProcessTapCapture: @unchecked Sendable {
             }
             aggregateDeviceID = aggregateID
 
-            let delivery = PCMDeliveryBox(onAudio)
+            let delivery = PCMDeliveryBox(format: format, handler: onAudio)
             self.delivery = delivery
 
             var procID: AudioDeviceIOProcID?
@@ -103,12 +103,7 @@ public final class CoreAudioProcessTapCapture: @unchecked Sendable {
                 aggregateID,
                 queue
             ) { _, inputData, _, _, _ in
-                guard let buffer = AVAudioPCMBuffer(
-                    pcmFormat: format,
-                    bufferListNoCopy: inputData,
-                    deallocator: nil
-                ) else { return }
-                delivery.deliver(buffer)
+                delivery.deliver(inputData)
             }
             guard ioStatus == noErr else {
                 throw CoreAudioProcessTapError.createIOProc(ioStatus)
@@ -209,13 +204,20 @@ public final class CoreAudioProcessTapCapture: @unchecked Sendable {
 }
 
 private final class PCMDeliveryBox: @unchecked Sendable {
+    private let format: AVAudioFormat
     private let handler: (AVAudioPCMBuffer) -> Void
 
-    init(_ handler: @escaping (AVAudioPCMBuffer) -> Void) {
+    init(format: AVAudioFormat, handler: @escaping (AVAudioPCMBuffer) -> Void) {
+        self.format = format
         self.handler = handler
     }
 
-    func deliver(_ buffer: AVAudioPCMBuffer) {
+    func deliver(_ inputData: UnsafePointer<AudioBufferList>) {
+        guard let buffer = AVAudioPCMBuffer(
+            pcmFormat: format,
+            bufferListNoCopy: inputData,
+            deallocator: nil
+        ) else { return }
         handler(buffer)
     }
 }

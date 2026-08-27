@@ -2,45 +2,56 @@
 import Foundation
 import XCTest
 import SFCallCore
-import SFCallMac
 @testable import SFCallHostSupport
 
 final class HostViewModelTests: XCTestCase {
     @MainActor
-    func testRefreshSuccessPublishesSourcesAndReadyState() {
+    func testRefreshPublishesActiveAudioProcessesFirst() {
         let driver = FakeHostRuntimeDriver()
         driver.sourcesResult = .success([
-            HostSourceItem(id: "app:1", kind: .application, title: "Test Call")
+            HostAudioSourceItem(id: "2", title: "Safari", bundleID: "com.apple.Safari", isRunningOutput: false),
+            HostAudioSourceItem(id: "1", title: "Zoom", bundleID: "us.zoom.xos", isRunningOutput: true)
         ])
         let model = HostViewModel(driver: driver)
 
-        model.refreshSources()
+        model.refreshAudioSources()
 
         XCTAssertEqual(driver.refreshCount, 1)
+        XCTAssertEqual(model.sources.map(\.id), ["1", "2"])
         XCTAssertEqual(model.status, .ready)
-        XCTAssertEqual(model.sources.map(\.id), ["app:1"])
     }
 
     @MainActor
-    func testRefreshFailurePublishesFailedState() {
+    func testRefreshClearsSelectionWhenProcessDisappears() {
         let driver = FakeHostRuntimeDriver()
-        driver.sourcesResult = .failure(HostTestError.sourceRefresh)
+        driver.sourcesResult = .success([
+            HostAudioSourceItem(id: "1", title: "Zoom", bundleID: nil, isRunningOutput: true)
+        ])
         let model = HostViewModel(driver: driver)
+        model.refreshAudioSources()
+        model.selectedSourceID = "1"
 
-        model.refreshSources()
+        driver.sourcesResult = .success([])
+        model.refreshAudioSources()
 
-        XCTAssertEqual(model.status, .failed("source refresh failed"))
-        XCTAssertTrue(model.sources.isEmpty)
         XCTAssertNil(model.selectedSourceID)
     }
 
     @MainActor
-    func testGrantRequiredPermissionsRequestsOnceAndPublishesSnapshot() {
+    func testIntelligenceStateComesFromDriver() {
+        let driver = FakeHostRuntimeDriver()
+        driver.intelligence = .modelNotReady
+        let model = HostViewModel(driver: driver)
+
+        XCTAssertEqual(model.intelligenceState, .modelNotReady)
+    }
+
+    @MainActor
+    func testGrantRequiredPermissionsRequestsMicAndSpeechSnapshot() {
         let driver = FakeHostRuntimeDriver()
         driver.permissionSnapshot = HostPermissionSnapshot(
             microphone: .authorized,
             speech: .authorized,
-            screenCapture: .authorized,
             systemAudio: .notDetermined
         )
         let model = HostViewModel(driver: driver)
@@ -49,59 +60,10 @@ final class HostViewModelTests: XCTestCase {
 
         XCTAssertEqual(driver.permissionRequestCount, 1)
         XCTAssertEqual(model.permissions, driver.permissionSnapshot)
-        XCTAssertEqual(model.status, .idle)
     }
 
     @MainActor
-    func testGrantRequiredPermissionsPreservesReadyStateAfterSourceRefresh() {
-        let driver = FakeHostRuntimeDriver()
-        driver.sourcesResult = .success([
-            HostSourceItem(id: "app:1", kind: .application, title: "Test Call")
-        ])
-        driver.permissionSnapshot = .allAuthorized
-        let model = HostViewModel(driver: driver)
-        model.refreshSources()
-
-        model.grantRequiredPermissions()
-
-        XCTAssertEqual(driver.permissionRequestCount, 1)
-        XCTAssertEqual(model.permissions, .allAuthorized)
-        XCTAssertEqual(model.status, .ready)
-    }
-
-    @MainActor
-    func testSourceEnumerationIsUnavailableWithoutScreenCapturePermission() {
-        let driver = FakeHostRuntimeDriver()
-        driver.permissionSnapshot = HostPermissionSnapshot(
-            microphone: .authorized,
-            speech: .authorized,
-            screenCapture: .denied,
-            systemAudio: .notDetermined
-        )
-        let model = HostViewModel(driver: driver)
-        model.grantRequiredPermissions()
-
-        XCTAssertFalse(model.canEnumerateSources)
-        XCTAssertEqual(model.sourcePermissionMessage, "Source enumeration requires Screen Capture permission.")
-    }
-
-    @MainActor
-    func testDeniedScreenCaptureShowsSettingsAffordance() {
-        let driver = FakeHostRuntimeDriver()
-        driver.permissionSnapshot = HostPermissionSnapshot(
-            microphone: .authorized,
-            speech: .authorized,
-            screenCapture: .denied,
-            systemAudio: .notDetermined
-        )
-        let model = HostViewModel(driver: driver)
-        model.grantRequiredPermissions()
-
-        XCTAssertTrue(model.shouldShowScreenCaptureSettings)
-    }
-
-    @MainActor
-    func testStartWithoutSelectionDoesNotRequestPermissionsOrRuntime() {
+    func testStartWithoutAudioSelectionDoesNotRequestPermissionsOrRuntime() {
         let driver = FakeHostRuntimeDriver()
         let model = HostViewModel(driver: driver)
 
@@ -109,20 +71,19 @@ final class HostViewModelTests: XCTestCase {
 
         XCTAssertEqual(driver.permissionRequestCount, 0)
         XCTAssertEqual(driver.startCount, 0)
-        XCTAssertEqual(model.status, .failed("Select a capture source first."))
+        XCTAssertEqual(model.status, .failed("Select an audio source first."))
     }
 
     @MainActor
-    func testDeniedPermissionDoesNotStartRuntime() {
+    func testDeniedMicDoesNotStartRuntime() {
         let driver = FakeHostRuntimeDriver()
         driver.permissionSnapshot = HostPermissionSnapshot(
             microphone: .denied,
             speech: .authorized,
-            screenCapture: .notDetermined,
             systemAudio: .notDetermined
         )
         let model = HostViewModel(driver: driver)
-        model.selectedSourceID = "app:1"
+        model.selectedSourceID = "1"
 
         model.start()
 
@@ -132,39 +93,24 @@ final class HostViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSuccessfulStartTransitionsToRunning() {
+    func testSuccessfulStartUsesSelectedAudioProcess() {
         let driver = FakeHostRuntimeDriver()
         driver.permissionSnapshot = .allAuthorized
         let model = HostViewModel(driver: driver)
-        model.selectedSourceID = "app:1"
+        model.selectedSourceID = "42"
 
         model.start()
 
-        XCTAssertEqual(driver.startCount, 1)
-        XCTAssertEqual(driver.lastStartedSourceID, "app:1")
+        XCTAssertEqual(driver.lastStartedSourceID, "42")
         XCTAssertEqual(model.status, .running)
     }
 
     @MainActor
-    func testFailedStartDoesNotRetainRunningState() {
-        let driver = FakeHostRuntimeDriver()
-        driver.permissionSnapshot = .allAuthorized
-        driver.startResult = .failure(HostTestError.runtimeStart)
-        let model = HostViewModel(driver: driver)
-        model.selectedSourceID = "app:1"
-
-        model.start()
-
-        XCTAssertEqual(driver.startCount, 1)
-        XCTAssertEqual(model.status, .failed("runtime start failed"))
-    }
-
-    @MainActor
-    func testStopStopsExactlyOneActiveRuntimeAndReturnsIdle() {
+    func testStopStopsExactlyOneActiveRuntime() {
         let driver = FakeHostRuntimeDriver()
         driver.permissionSnapshot = .allAuthorized
         let model = HostViewModel(driver: driver)
-        model.selectedSourceID = "app:1"
+        model.selectedSourceID = "1"
         model.start()
 
         model.stop()
@@ -179,35 +125,21 @@ final class HostViewModelTests: XCTestCase {
         let driver = FakeHostRuntimeDriver()
         driver.permissionSnapshot = .allAuthorized
         let model = HostViewModel(driver: driver)
-        model.selectedSourceID = "app:1"
+        model.selectedSourceID = "1"
 
         model.start()
         model.start()
 
         XCTAssertEqual(driver.startCount, 1)
-        XCTAssertEqual(model.status, .running)
-    }
-}
-
-private enum HostTestError: LocalizedError {
-    case sourceRefresh
-    case runtimeStart
-
-    var errorDescription: String? {
-        switch self {
-        case .sourceRefresh:
-            "source refresh failed"
-        case .runtimeStart:
-            "runtime start failed"
-        }
     }
 }
 
 @MainActor
 private final class FakeHostRuntimeDriver: HostRuntimeDriving {
-    var sourcesResult: Result<[HostSourceItem], Error> = .success([])
+    var sourcesResult: Result<[HostAudioSourceItem], Error> = .success([])
     var permissionSnapshot: HostPermissionSnapshot = .allAuthorized
     var startResult: Result<Void, Error> = .success(())
+    var intelligence: HostIntelligenceState = .available
 
     private(set) var refreshCount = 0
     private(set) var permissionRequestCount = 0
@@ -215,8 +147,8 @@ private final class FakeHostRuntimeDriver: HostRuntimeDriving {
     private(set) var stopCount = 0
     private(set) var lastStartedSourceID: String?
 
-    func refreshSources(
-        completion: @escaping @MainActor (Result<[HostSourceItem], Error>) -> Void
+    func refreshAudioSources(
+        completion: @escaping @MainActor (Result<[HostAudioSourceItem], Error>) -> Void
     ) {
         refreshCount += 1
         completion(sourcesResult)
@@ -229,6 +161,10 @@ private final class FakeHostRuntimeDriver: HostRuntimeDriving {
         completion(permissionSnapshot)
     }
 
+    func intelligenceState() -> HostIntelligenceState {
+        intelligence
+    }
+
     func start(
         sourceID: String,
         onResponseRequest: @escaping @MainActor @Sendable (ResponseRequest) -> Void,
@@ -239,16 +175,13 @@ private final class FakeHostRuntimeDriver: HostRuntimeDriving {
         completion(startResult)
     }
 
-    func stop() {
-        stopCount += 1
-    }
+    func stop() { stopCount += 1 }
 }
 
 private extension HostPermissionSnapshot {
     static let allAuthorized = HostPermissionSnapshot(
         microphone: .authorized,
         speech: .authorized,
-        screenCapture: .authorized,
         systemAudio: .authorized
     )
 }

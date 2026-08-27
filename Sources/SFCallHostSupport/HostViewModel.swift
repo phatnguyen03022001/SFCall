@@ -48,6 +48,18 @@ public final class HostViewModel: ObservableObject {
         }
     }
 
+    public func grantRequiredPermissions() {
+        guard !isBusyOrRunning else { return }
+        let returnStatus: HostRuntimeStatus = sources.isEmpty ? .idle : .ready
+        status = .requestingPermissions
+
+        driver.requestPermissions { [weak self] snapshot in
+            guard let self else { return }
+            self.permissions = snapshot
+            self.status = returnStatus
+        }
+    }
+
     public func start() {
         guard !isBusyOrRunning else { return }
         guard let selectedSourceID else {

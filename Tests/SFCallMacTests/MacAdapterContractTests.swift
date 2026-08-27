@@ -10,9 +10,9 @@ final class MacAdapterContractTests: XCTestCase {
 #endif
     }
 
-    func testScreenAudioCaptureIsSendable() {
+    func testCanonicalProcessTapCaptureIsSendable() {
 #if os(macOS)
-        requireSendable(ScreenAudioCapture.self)
+        requireSendable(CoreAudioProcessTapCapture.self)
 #endif
     }
 

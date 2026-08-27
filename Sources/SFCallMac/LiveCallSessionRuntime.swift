@@ -1,11 +1,10 @@
 #if os(macOS)
 import AVFoundation
-import CoreMedia
 import Foundation
 
 public protocol LiveCallRemoteAudioSource: AnyObject {
     func start(
-        onAudio: @escaping @Sendable (CMSampleBuffer) -> Void,
+        onAudio: @escaping (AVAudioPCMBuffer) -> Void,
         completion: @escaping @Sendable (Error?) -> Void
     )
 
@@ -19,7 +18,6 @@ public protocol LiveCallMicrophoneAudioSource: AnyObject {
 
 public protocol LiveCallSpeechTranscribing: AnyObject {
     func start(onTranscript: @escaping (AppleSpeechTranscript) -> Void) throws
-    func append(sampleBuffer: CMSampleBuffer)
     func append(pcmBuffer: AVAudioPCMBuffer)
     func stop()
 }
@@ -43,11 +41,11 @@ public final class LiveCallSessionRuntime: @unchecked Sendable {
     }
 
     public static func native(
-        source: CallCaptureSource,
+        source: AudioProcessSource,
         localeIdentifier: String = "en-US"
     ) -> LiveCallSessionRuntime {
         LiveCallSessionRuntime(
-            remoteAudio: ScreenCaptureRemoteAudioSource(source: source),
+            remoteAudio: CoreAudioProcessTapCapture(source: source),
             microphoneAudio: MicrophoneCapture(),
             remoteSpeech: AppleSpeechTranscriber(localeIdentifier: localeIdentifier),
             microphoneSpeech: AppleSpeechTranscriber(localeIdentifier: localeIdentifier)
@@ -57,24 +55,5 @@ public final class LiveCallSessionRuntime: @unchecked Sendable {
 
 extension MicrophoneCapture: LiveCallMicrophoneAudioSource {}
 extension AppleSpeechTranscriber: LiveCallSpeechTranscribing {}
-
-private final class ScreenCaptureRemoteAudioSource: LiveCallRemoteAudioSource, @unchecked Sendable {
-    private let source: CallCaptureSource
-    private let capture = ScreenAudioCapture()
-
-    init(source: CallCaptureSource) {
-        self.source = source
-    }
-
-    func start(
-        onAudio: @escaping @Sendable (CMSampleBuffer) -> Void,
-        completion: @escaping @Sendable (Error?) -> Void
-    ) {
-        capture.start(source: source, onAudio: onAudio, completion: completion)
-    }
-
-    func stop(completion: (@Sendable () -> Void)?) {
-        capture.stop(completion: completion)
-    }
-}
+extension CoreAudioProcessTapCapture: LiveCallRemoteAudioSource {}
 #endif

@@ -6,6 +6,7 @@ public final class LiveCallSessionController: @unchecked Sendable {
     private let presentationCoordinator: LiveCallPresentationCoordinator
     private let onHUDUpdate: (PrivateHUDContent) -> Void
     private let onResponseRequest: (ResponseRequest) -> Void
+    private let onTranscriptTurn: (TranscriptSpeaker, String, Bool) -> Void
     private let eventLock = NSLock()
     private let runtimeLock = NSLock()
     private var activeRuntime: LiveCallSessionRuntime?
@@ -14,7 +15,8 @@ public final class LiveCallSessionController: @unchecked Sendable {
         baseline: CaseBaseline,
         clientFacts: [ClientFactRecord],
         onHUDUpdate: @escaping (PrivateHUDContent) -> Void,
-        onResponseRequest: @escaping (ResponseRequest) -> Void
+        onResponseRequest: @escaping (ResponseRequest) -> Void,
+        onTranscriptTurn: @escaping (TranscriptSpeaker, String, Bool) -> Void = { _, _, _ in }
     ) {
         self.presentationCoordinator = LiveCallPresentationCoordinator(
             baseline: baseline,
@@ -22,6 +24,7 @@ public final class LiveCallSessionController: @unchecked Sendable {
         )
         self.onHUDUpdate = onHUDUpdate
         self.onResponseRequest = onResponseRequest
+        self.onTranscriptTurn = onTranscriptTurn
     }
 
     public func start(
@@ -71,15 +74,29 @@ public final class LiveCallSessionController: @unchecked Sendable {
     }
 
     public func ingestRemoteTranscript(_ transcript: AppleSpeechTranscript) {
+        onTranscriptTurn(.client, transcript.text, transcript.isFinal)
         eventLock.lock()
         defer { eventLock.unlock() }
         publish(presentationCoordinator.ingestRemote(transcript))
     }
 
     public func ingestMicrophoneTranscript(_ transcript: AppleSpeechTranscript) {
+        onTranscriptTurn(.user, transcript.text, transcript.isFinal)
         eventLock.lock()
         defer { eventLock.unlock() }
         publish(presentationCoordinator.ingestMicrophone(transcript))
+    }
+
+    public func applyNegotiationAdvice(_ advice: NegotiationAdvice) {
+        eventLock.lock()
+        defer { eventLock.unlock() }
+        onHUDUpdate(presentationCoordinator.applyNegotiationAdvice(advice))
+    }
+
+    public func applyNegotiationFailure(_ message: String) {
+        eventLock.lock()
+        defer { eventLock.unlock() }
+        onHUDUpdate(presentationCoordinator.applyNegotiationFailure(message))
     }
 
     private func publish(_ update: LiveCallPresentationUpdate) {

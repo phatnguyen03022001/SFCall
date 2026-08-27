@@ -12,7 +12,7 @@ public final class CallCaptureSource: Identifiable {
     public let kind: CallCaptureSourceKind
     public let title: String
 
-    fileprivate let filter: SCContentFilter
+    let filter: SCContentFilter
 
     fileprivate init(id: String, kind: CallCaptureSourceKind, title: String, filter: SCContentFilter) {
         self.id = id

@@ -74,6 +74,7 @@ public protocol HostRuntimeDriving: AnyObject {
         completion: @escaping @MainActor (HostPermissionSnapshot) -> Void
     )
 
+    func currentPermissions() -> HostPermissionSnapshot
     func intelligenceState() -> HostIntelligenceState
 
     func start(

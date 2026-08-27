@@ -1,5 +1,6 @@
 #if os(macOS)
 import SFCallHostSupport
+import SFCallMac
 import SwiftUI
 
 @MainActor

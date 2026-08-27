@@ -20,7 +20,7 @@ public final class LiveCallHUDSession {
         baseline: CaseBaseline,
         clientFacts: [ClientFactRecord],
         hud: any LiveCallHUDPresenting,
-        onResponseRequest: @escaping (ResponseRequest) -> Void
+        onResponseRequest: @escaping @MainActor @Sendable (ResponseRequest) -> Void
     ) {
         self.hud = hud
 
@@ -86,12 +86,12 @@ public final class LiveCallHUDSession {
 
 private final class LiveCallHUDEventBridge: @unchecked Sendable {
     private let onHUDUpdate: @MainActor (PrivateHUDContent) -> Void
-    private let onResponseRequest: @MainActor (ResponseRequest) -> Void
+    private let onResponseRequest: @MainActor @Sendable (ResponseRequest) -> Void
 
     @MainActor
     init(
         hud: any LiveCallHUDPresenting,
-        onResponseRequest: @escaping (ResponseRequest) -> Void
+        onResponseRequest: @escaping @MainActor @Sendable (ResponseRequest) -> Void
     ) {
         self.onHUDUpdate = { content in
             hud.update(content)

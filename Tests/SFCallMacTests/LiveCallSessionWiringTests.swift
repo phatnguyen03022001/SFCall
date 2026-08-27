@@ -1,12 +1,11 @@
 #if os(macOS)
 import AVFoundation
-import CoreMedia
 import XCTest
 import SFCallCore
 @testable import SFCallMac
 
 final class LiveCallSessionWiringTests: XCTestCase {
-    func testRuntimeRoutesBothSpeechStreamsAndStopsAllComponents() throws {
+    func testRuntimeRoutesBothPCMStreamsAndStopsAllComponents() throws {
         let fixture = makeFixture()
         let remoteAudio = FakeRemoteAudioSource()
         let microphoneAudio = FakeMicrophoneAudioSource()
@@ -37,8 +36,15 @@ final class LiveCallSessionWiringTests: XCTestCase {
         XCTAssertEqual(remoteSpeech.startCount, 1)
         XCTAssertEqual(microphoneSpeech.startCount, 1)
 
-        remoteSpeech.emit(AppleSpeechTranscript(text: "Can we ship Friday?", isFinal: true))
-        microphoneSpeech.emit(AppleSpeechTranscript(text: "Let me check.", isFinal: true))
+        let buffer = makePCMBuffer()
+        remoteAudio.emit(buffer)
+        microphoneAudio.emit(buffer)
+
+        XCTAssertEqual(remoteSpeech.pcmAppendCount, 1)
+        XCTAssertEqual(microphoneSpeech.pcmAppendCount, 1)
+
+        remoteSpeech.emitTranscript(AppleSpeechTranscript(text: "Can we ship Friday?", isFinal: true))
+        microphoneSpeech.emitTranscript(AppleSpeechTranscript(text: "Let me check.", isFinal: true))
 
         XCTAssertEqual(requests.map(\.clientSaid), ["Can we ship Friday?"])
         XCTAssertEqual(hudUpdates.last?.clientTranscript, "Can we ship Friday?")
@@ -129,10 +135,14 @@ final class LiveCallSessionWiringTests: XCTestCase {
             value: "Prefers concise updates",
             evidenceRefs: ["message:1"]
         )
-        return (
-            CaseBaseline(version: 3, requirements: [requirement]),
-            [fact]
-        )
+        return (CaseBaseline(version: 3, requirements: [requirement]), [fact])
+    }
+
+    private func makePCMBuffer() -> AVAudioPCMBuffer {
+        let format = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 16)!
+        buffer.frameLength = 16
+        return buffer
     }
 }
 
@@ -143,6 +153,7 @@ private enum TestError: Error {
 
 private final class FakeRemoteAudioSource: LiveCallRemoteAudioSource, @unchecked Sendable {
     private let startError: Error?
+    private var onAudio: ((AVAudioPCMBuffer) -> Void)?
     private(set) var startCount = 0
     private(set) var stopCount = 0
 
@@ -151,21 +162,28 @@ private final class FakeRemoteAudioSource: LiveCallRemoteAudioSource, @unchecked
     }
 
     func start(
-        onAudio: @escaping @Sendable (CMSampleBuffer) -> Void,
+        onAudio: @escaping (AVAudioPCMBuffer) -> Void,
         completion: @escaping @Sendable (Error?) -> Void
     ) {
         startCount += 1
+        self.onAudio = onAudio
         completion(startError)
     }
 
     func stop(completion: (@Sendable () -> Void)?) {
         stopCount += 1
+        onAudio = nil
         completion?()
+    }
+
+    func emit(_ buffer: AVAudioPCMBuffer) {
+        onAudio?(buffer)
     }
 }
 
 private final class FakeMicrophoneAudioSource: LiveCallMicrophoneAudioSource {
     private let startError: Error?
+    private var onBuffer: ((AVAudioPCMBuffer) -> Void)?
     private(set) var startCount = 0
     private(set) var stopCount = 0
 
@@ -176,10 +194,16 @@ private final class FakeMicrophoneAudioSource: LiveCallMicrophoneAudioSource {
     func start(onBuffer: @escaping (AVAudioPCMBuffer) -> Void) throws {
         startCount += 1
         if let startError { throw startError }
+        self.onBuffer = onBuffer
     }
 
     func stop() {
         stopCount += 1
+        onBuffer = nil
+    }
+
+    func emit(_ buffer: AVAudioPCMBuffer) {
+        onBuffer?(buffer)
     }
 }
 
@@ -187,21 +211,23 @@ private final class FakeSpeechTranscriber: LiveCallSpeechTranscribing {
     private var onTranscript: ((AppleSpeechTranscript) -> Void)?
     private(set) var startCount = 0
     private(set) var stopCount = 0
+    private(set) var pcmAppendCount = 0
 
     func start(onTranscript: @escaping (AppleSpeechTranscript) -> Void) throws {
         startCount += 1
         self.onTranscript = onTranscript
     }
 
-    func append(sampleBuffer: CMSampleBuffer) {}
-    func append(pcmBuffer: AVAudioPCMBuffer) {}
+    func append(pcmBuffer: AVAudioPCMBuffer) {
+        pcmAppendCount += 1
+    }
 
     func stop() {
         stopCount += 1
         onTranscript = nil
     }
 
-    func emit(_ transcript: AppleSpeechTranscript) {
+    func emitTranscript(_ transcript: AppleSpeechTranscript) {
         onTranscript?(transcript)
     }
 }

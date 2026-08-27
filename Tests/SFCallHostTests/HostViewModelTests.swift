@@ -93,9 +93,13 @@ final class HostViewModelTests: XCTestCase {
     }
 
     @MainActor
-    func testSuccessfulStartUsesSelectedAudioProcess() {
+    func testSuccessfulStartUsesSelectedAudioProcessAndPublishesSystemAudioAuthorization() {
         let driver = FakeHostRuntimeDriver()
-        driver.permissionSnapshot = .allAuthorized
+        driver.permissionSnapshot = HostPermissionSnapshot(
+            microphone: .authorized,
+            speech: .authorized,
+            systemAudio: .notDetermined
+        )
         let model = HostViewModel(driver: driver)
         model.selectedSourceID = "42"
 
@@ -103,6 +107,7 @@ final class HostViewModelTests: XCTestCase {
 
         XCTAssertEqual(driver.lastStartedSourceID, "42")
         XCTAssertEqual(model.status, .running)
+        XCTAssertEqual(model.permissions.systemAudio, .authorized)
     }
 
     @MainActor
@@ -161,6 +166,10 @@ private final class FakeHostRuntimeDriver: HostRuntimeDriving {
         completion(permissionSnapshot)
     }
 
+    func currentPermissions() -> HostPermissionSnapshot {
+        permissionSnapshot
+    }
+
     func intelligenceState() -> HostIntelligenceState {
         intelligence
     }
@@ -172,6 +181,13 @@ private final class FakeHostRuntimeDriver: HostRuntimeDriving {
     ) {
         startCount += 1
         lastStartedSourceID = sourceID
+        if case .success = startResult {
+            permissionSnapshot = HostPermissionSnapshot(
+                microphone: permissionSnapshot.microphone,
+                speech: permissionSnapshot.speech,
+                systemAudio: .authorized
+            )
+        }
         completion(startResult)
     }
 

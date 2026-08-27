@@ -9,4 +9,12 @@ final class MacAdapterContractTests: XCTestCase {
         XCTAssertFalse(MacAdapterAvailability.isSupportedPlatform)
 #endif
     }
+
+    func testScreenAudioCaptureIsSendable() {
+#if os(macOS)
+        requireSendable(ScreenAudioCapture.self)
+#endif
+    }
+
+    private func requireSendable<T: Sendable>(_: T.Type) {}
 }

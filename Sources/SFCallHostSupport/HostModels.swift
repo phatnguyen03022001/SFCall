@@ -1,17 +1,18 @@
 #if os(macOS)
 import Foundation
 import SFCallCore
-import SFCallMac
 
-public struct HostSourceItem: Equatable, Identifiable, Sendable {
+public struct HostAudioSourceItem: Equatable, Identifiable, Sendable {
     public let id: String
-    public let kind: CallCaptureSourceKind
     public let title: String
+    public let bundleID: String?
+    public let isRunningOutput: Bool
 
-    public init(id: String, kind: CallCaptureSourceKind, title: String) {
+    public init(id: String, title: String, bundleID: String?, isRunningOutput: Bool) {
         self.id = id
-        self.kind = kind
         self.title = title
+        self.bundleID = bundleID
+        self.isRunningOutput = isRunningOutput
     }
 }
 
@@ -36,38 +37,44 @@ public enum HostPermissionState: String, Equatable, Sendable {
 public struct HostPermissionSnapshot: Equatable, Sendable {
     public let microphone: HostPermissionState
     public let speech: HostPermissionState
-    public let screenCapture: HostPermissionState
     public let systemAudio: HostPermissionState
 
     public init(
         microphone: HostPermissionState,
         speech: HostPermissionState,
-        screenCapture: HostPermissionState,
         systemAudio: HostPermissionState
     ) {
         self.microphone = microphone
         self.speech = speech
-        self.screenCapture = screenCapture
         self.systemAudio = systemAudio
     }
 
     public static let unknown = HostPermissionSnapshot(
         microphone: .notDetermined,
         speech: .notDetermined,
-        screenCapture: .notDetermined,
         systemAudio: .notDetermined
     )
 }
 
+public enum HostIntelligenceState: String, Equatable, Sendable {
+    case available
+    case appleIntelligenceDisabled
+    case modelNotReady
+    case deviceNotEligible
+    case unavailable
+}
+
 @MainActor
 public protocol HostRuntimeDriving: AnyObject {
-    func refreshSources(
-        completion: @escaping @MainActor (Result<[HostSourceItem], Error>) -> Void
+    func refreshAudioSources(
+        completion: @escaping @MainActor (Result<[HostAudioSourceItem], Error>) -> Void
     )
 
     func requestPermissions(
         completion: @escaping @MainActor (HostPermissionSnapshot) -> Void
     )
+
+    func intelligenceState() -> HostIntelligenceState
 
     func start(
         sourceID: String,

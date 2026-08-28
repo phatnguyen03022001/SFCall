@@ -64,10 +64,23 @@ public final class LiveCallHUDSession {
         localeIdentifier: String = "en-US",
         completion: @escaping (Result<Void, Error>) -> Void
     ) {
-        start(
-            runtime: .native(source: source, localeIdentifier: localeIdentifier),
-            completion: completion
-        )
+        Task { [weak self] in
+            do {
+                let runtime = try await LiveCallSessionRuntime.native(
+                    source: source,
+                    localeIdentifier: localeIdentifier
+                )
+                guard let self else {
+                    runtime.remoteSpeech.stop()
+                    runtime.microphoneSpeech.stop()
+                    completion(.failure(CancellationError()))
+                    return
+                }
+                self.start(runtime: runtime, completion: completion)
+            } catch {
+                completion(.failure(error))
+            }
+        }
     }
 
     public func applyNegotiationAdvice(_ advice: NegotiationAdvice) {

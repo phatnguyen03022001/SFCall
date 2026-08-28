@@ -156,6 +156,11 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
     public var microphoneSpeechErrorDomain: String?
     public var microphoneSpeechErrorCode: Int?
     public var microphoneSpeechErrorMessage: String?
+    public var activeSpeechSpeaker: String?
+    public var lastSpeechSpeaker: String?
+    public var speechTaskState: String
+    public var speechSwitchCount: Int
+    public var maximumConcurrentRecognitionTaskCount: Int
     public var clientPartials: [String]
     public var userPartials: [String]
     public var clientFinals: [String]
@@ -205,6 +210,11 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
         microphoneSpeechErrorDomain: String? = nil,
         microphoneSpeechErrorCode: Int? = nil,
         microphoneSpeechErrorMessage: String? = nil,
+        activeSpeechSpeaker: String? = nil,
+        lastSpeechSpeaker: String? = nil,
+        speechTaskState: String = "notObserved",
+        speechSwitchCount: Int = 0,
+        maximumConcurrentRecognitionTaskCount: Int = 0,
         clientPartials: [String] = [],
         userPartials: [String] = [],
         clientFinals: [String] = [],
@@ -253,6 +263,11 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
         self.microphoneSpeechErrorDomain = microphoneSpeechErrorDomain
         self.microphoneSpeechErrorCode = microphoneSpeechErrorCode
         self.microphoneSpeechErrorMessage = microphoneSpeechErrorMessage
+        self.activeSpeechSpeaker = activeSpeechSpeaker
+        self.lastSpeechSpeaker = lastSpeechSpeaker
+        self.speechTaskState = speechTaskState
+        self.speechSwitchCount = speechSwitchCount
+        self.maximumConcurrentRecognitionTaskCount = maximumConcurrentRecognitionTaskCount
         self.clientPartials = clientPartials
         self.userPartials = userPartials
         self.clientFinals = clientFinals
@@ -427,22 +442,24 @@ public final class NativeSmokeRunner {
 
         let remoteAppleSpeech: AppleSpeechTranscriber?
         let microphoneAppleSpeech: AppleSpeechTranscriber?
+        let turnCoordinator: SingleRecognizerTurnCoordinator?
         let remoteSpeech: any LiveCallSpeechTranscribing
         let microphoneSpeech: any LiveCallSpeechTranscribing
 
         switch speechMode {
         case .both:
-            let remote = AppleSpeechTranscriber(localeIdentifier: "en-US")
-            let microphone = AppleSpeechTranscriber(localeIdentifier: "en-US")
-            remoteAppleSpeech = remote
-            microphoneAppleSpeech = microphone
-            remoteSpeech = remote
-            microphoneSpeech = microphone
+            let coordinator = SingleRecognizerTurnCoordinator(localeIdentifier: "en-US")
+            remoteAppleSpeech = nil
+            microphoneAppleSpeech = nil
+            turnCoordinator = coordinator
+            remoteSpeech = coordinator.clientEndpoint
+            microphoneSpeech = coordinator.userEndpoint
 
         case .remoteOnly:
             let remote = AppleSpeechTranscriber(localeIdentifier: "en-US")
             remoteAppleSpeech = remote
             microphoneAppleSpeech = nil
+            turnCoordinator = nil
             remoteSpeech = remote
             microphoneSpeech = NativeSmokeDisabledSpeechTranscriber()
 
@@ -450,6 +467,7 @@ public final class NativeSmokeRunner {
             let microphone = AppleSpeechTranscriber(localeIdentifier: "en-US")
             remoteAppleSpeech = nil
             microphoneAppleSpeech = microphone
+            turnCoordinator = nil
             remoteSpeech = NativeSmokeDisabledSpeechTranscriber()
             microphoneSpeech = microphone
         }
@@ -479,10 +497,15 @@ public final class NativeSmokeRunner {
         }
 
         guard started else {
-            let remoteSpeechDiagnostics = remoteAppleSpeech?.diagnosticSnapshot()
-                ?? Self.disabledSpeechDiagnostics
-            let microphoneSpeechDiagnostics = microphoneAppleSpeech?.diagnosticSnapshot()
-                ?? Self.disabledSpeechDiagnostics
+            let turnDiagnostics = turnCoordinator?.diagnosticSnapshot()
+            let remoteSpeechDiagnostics = Self.speechDiagnostics(
+                appleSpeech: remoteAppleSpeech,
+                turnDiagnostics: turnDiagnostics
+            )
+            let microphoneSpeechDiagnostics = Self.speechDiagnostics(
+                appleSpeech: microphoneAppleSpeech,
+                turnDiagnostics: turnDiagnostics
+            )
             session.stop()
             let audio = audioDiagnostics.snapshot()
             return NativeSmokeReport(
@@ -514,6 +537,11 @@ public final class NativeSmokeRunner {
                 microphoneSpeechErrorDomain: microphoneSpeechDiagnostics.errorDomain,
                 microphoneSpeechErrorCode: microphoneSpeechDiagnostics.errorCode,
                 microphoneSpeechErrorMessage: microphoneSpeechDiagnostics.errorMessage,
+                activeSpeechSpeaker: turnDiagnostics?.activeSpeaker,
+                lastSpeechSpeaker: turnDiagnostics?.lastSpeaker,
+                speechTaskState: turnDiagnostics?.taskState ?? "notObserved",
+                speechSwitchCount: turnDiagnostics?.switchCount ?? 0,
+                maximumConcurrentRecognitionTaskCount: turnDiagnostics?.maximumConcurrentRecognitionTaskCount ?? 0,
                 clientPartials: observation.clientPartials,
                 userPartials: observation.userPartials,
                 clientFinals: observation.clientFinals,
@@ -525,10 +553,15 @@ public final class NativeSmokeRunner {
         }
 
         try? await Task.sleep(for: .seconds(seconds))
-        let remoteSpeechDiagnostics = remoteAppleSpeech?.diagnosticSnapshot()
-            ?? Self.disabledSpeechDiagnostics
-        let microphoneSpeechDiagnostics = microphoneAppleSpeech?.diagnosticSnapshot()
-            ?? Self.disabledSpeechDiagnostics
+        let turnDiagnostics = turnCoordinator?.diagnosticSnapshot()
+        let remoteSpeechDiagnostics = Self.speechDiagnostics(
+            appleSpeech: remoteAppleSpeech,
+            turnDiagnostics: turnDiagnostics
+        )
+        let microphoneSpeechDiagnostics = Self.speechDiagnostics(
+            appleSpeech: microphoneAppleSpeech,
+            turnDiagnostics: turnDiagnostics
+        )
         session.stop()
         observation.stopCleanup = true
 
@@ -600,6 +633,11 @@ public final class NativeSmokeRunner {
             microphoneSpeechErrorDomain: microphoneSpeechDiagnostics.errorDomain,
             microphoneSpeechErrorCode: microphoneSpeechDiagnostics.errorCode,
             microphoneSpeechErrorMessage: microphoneSpeechDiagnostics.errorMessage,
+            activeSpeechSpeaker: turnDiagnostics?.activeSpeaker,
+            lastSpeechSpeaker: turnDiagnostics?.lastSpeaker,
+            speechTaskState: turnDiagnostics?.taskState ?? "notObserved",
+            speechSwitchCount: turnDiagnostics?.switchCount ?? 0,
+            maximumConcurrentRecognitionTaskCount: turnDiagnostics?.maximumConcurrentRecognitionTaskCount ?? 0,
             clientPartials: observation.clientPartials,
             userPartials: observation.userPartials,
             clientFinals: observation.clientFinals,
@@ -657,6 +695,24 @@ public final class NativeSmokeRunner {
             errorCode: nil,
             errorMessage: nil
         )
+    }
+
+    private static func speechDiagnostics(
+        appleSpeech: AppleSpeechTranscriber?,
+        turnDiagnostics: SingleRecognizerTurnDiagnosticSnapshot?
+    ) -> AppleSpeechDiagnosticSnapshot {
+        if let appleSpeech {
+            return appleSpeech.diagnosticSnapshot()
+        }
+        if let turnDiagnostics {
+            return AppleSpeechDiagnosticSnapshot(
+                taskState: turnDiagnostics.taskState,
+                errorDomain: nil,
+                errorCode: nil,
+                errorMessage: nil
+            )
+        }
+        return disabledSpeechDiagnostics
     }
 
     private static func processReport(_ source: AudioProcessSource) -> NativeSmokeProcess {

@@ -14,7 +14,29 @@ protocol SingleRecognizerTurnRecognition: AnyObject {
 
 extension AppleSpeechTranscriber: SingleRecognizerTurnRecognition {}
 
-final class SingleRecognizerTurnCoordinator: @unchecked Sendable {
+public struct SingleRecognizerTurnDiagnosticSnapshot: Equatable, Sendable {
+    public let activeSpeaker: String?
+    public let lastSpeaker: String?
+    public let taskState: String
+    public let switchCount: Int
+    public let maximumConcurrentRecognitionTaskCount: Int
+
+    public init(
+        activeSpeaker: String?,
+        lastSpeaker: String?,
+        taskState: String,
+        switchCount: Int,
+        maximumConcurrentRecognitionTaskCount: Int
+    ) {
+        self.activeSpeaker = activeSpeaker
+        self.lastSpeaker = lastSpeaker
+        self.taskState = taskState
+        self.switchCount = switchCount
+        self.maximumConcurrentRecognitionTaskCount = maximumConcurrentRecognitionTaskCount
+    }
+}
+
+public final class SingleRecognizerTurnCoordinator {
     fileprivate enum Speaker {
         case client
         case user
@@ -52,6 +74,9 @@ final class SingleRecognizerTurnCoordinator: @unchecked Sendable {
     private var startingSpeaker: Speaker?
     private var finishing = false
     private var waitingSpeaker: Speaker?
+    private var lastSpeaker: Speaker?
+    private var switchCount = 0
+    private var maximumConcurrentRecognitionTaskCount = 0
 
     init(
         engineFactory: @escaping () -> any SingleRecognizerTurnRecognition,
@@ -61,16 +86,41 @@ final class SingleRecognizerTurnCoordinator: @unchecked Sendable {
         self.now = now
     }
 
-    convenience init(localeIdentifier: String) {
+    public convenience init(localeIdentifier: String) {
         self.init(engineFactory: { AppleSpeechTranscriber(localeIdentifier: localeIdentifier) })
     }
 
-    var clientEndpoint: any LiveCallSpeechTranscribing {
+    public var clientEndpoint: any LiveCallSpeechTranscribing {
         SingleRecognizerTurnEndpoint(coordinator: self, speaker: .client)
     }
 
-    var userEndpoint: any LiveCallSpeechTranscribing {
+    public var userEndpoint: any LiveCallSpeechTranscribing {
         SingleRecognizerTurnEndpoint(coordinator: self, speaker: .user)
+    }
+
+    public func diagnosticSnapshot() -> SingleRecognizerTurnDiagnosticSnapshot {
+        lock.lock()
+        let activeSpeaker = activeTurn.map { Self.name(of: $0.speaker) }
+        let lastSpeakerName = self.lastSpeaker.map(Self.name(of:))
+        let taskState: String
+        if let appleSpeech = activeTurn?.engine as? AppleSpeechTranscriber {
+            taskState = appleSpeech.diagnosticSnapshot().taskState
+        } else if finishing {
+            taskState = "finishing"
+        } else if startingSpeaker != nil {
+            taskState = "starting"
+        } else {
+            taskState = "notStarted"
+        }
+        let snapshot = SingleRecognizerTurnDiagnosticSnapshot(
+            activeSpeaker: activeSpeaker,
+            lastSpeaker: lastSpeakerName,
+            taskState: taskState,
+            switchCount: switchCount,
+            maximumConcurrentRecognitionTaskCount: maximumConcurrentRecognitionTaskCount
+        )
+        lock.unlock()
+        return snapshot
     }
 
     fileprivate func start(_ speaker: Speaker, onTranscript: @escaping (AppleSpeechTranscript) -> Void) throws {
@@ -186,6 +236,11 @@ final class SingleRecognizerTurnCoordinator: @unchecked Sendable {
         }
         activeTurn = ActiveTurn(speaker: speaker, engine: engine)
         startingSpeaker = nil
+        if let lastSpeaker, lastSpeaker != speaker {
+            switchCount += 1
+        }
+        lastSpeaker = speaker
+        maximumConcurrentRecognitionTaskCount = max(maximumConcurrentRecognitionTaskCount, 1)
         let buffers = preRoll[speaker] ?? []
         lock.unlock()
 
@@ -313,6 +368,13 @@ final class SingleRecognizerTurnCoordinator: @unchecked Sendable {
             }
         }
         return sqrt(sum / Float(Int(buffer.frameLength) * channelCount))
+    }
+
+    private static func name(of speaker: Speaker) -> String {
+        switch speaker {
+        case .client: "client"
+        case .user: "user"
+        }
     }
 }
 

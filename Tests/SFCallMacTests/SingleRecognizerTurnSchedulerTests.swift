@@ -118,6 +118,54 @@ final class SingleRecognizerTurnSchedulerTests: XCTestCase {
         XCTAssertEqual(factory.engines[1].receivedAmplitudes, [0.03, 0.04, 0.05])
     }
 
+    func testPreRollOwnsAudioSamplesIndependentOfProducerBufferLifetime() throws {
+        let clock = TestClock()
+        let factory = FakeRecognitionFactory()
+        let coordinator = SingleRecognizerTurnCoordinator(
+            engineFactory: { factory.makeEngine() },
+            now: { clock.now }
+        )
+        try start(coordinator)
+
+        sendActiveClientAudio(to: coordinator.clientEndpoint, clock: clock)
+        clock.advance(by: 0.60)
+        let producerBuffer = makePCMBuffer(amplitude: 0.37)
+        coordinator.userEndpoint.append(pcmBuffer: producerBuffer)
+        overwriteSamples(in: producerBuffer, with: 0.91)
+
+        clock.advance(by: 0.15)
+        coordinator.userEndpoint.append(pcmBuffer: makePCMBuffer(amplitude: 0.38))
+        factory.engines[0].complete()
+
+        XCTAssertEqual(factory.engines.count, 2)
+        XCTAssertEqual(factory.engines[1].receivedAmplitudes, [0.37, 0.38])
+    }
+
+    func testActivityConfirmationResetsAfterReleasedSilence() throws {
+        let clock = TestClock()
+        let factory = FakeRecognitionFactory()
+        let coordinator = SingleRecognizerTurnCoordinator(
+            engineFactory: { factory.makeEngine() },
+            now: { clock.now }
+        )
+        try start(coordinator)
+
+        sendActiveClientAudio(to: coordinator.clientEndpoint, clock: clock)
+        XCTAssertEqual(factory.engines.count, 1)
+
+        clock.advance(by: 0.60)
+        coordinator.clientEndpoint.append(pcmBuffer: makePCMBuffer(amplitude: 0))
+        factory.engines[0].complete()
+
+        clock.advance(by: 0.60)
+        coordinator.clientEndpoint.append(pcmBuffer: makePCMBuffer(amplitude: 0.10))
+        XCTAssertEqual(factory.engines.count, 1)
+
+        clock.advance(by: 0.20)
+        coordinator.clientEndpoint.append(pcmBuffer: makePCMBuffer(amplitude: 0.10))
+        XCTAssertEqual(factory.engines.count, 2)
+    }
+
     private func start(_ coordinator: SingleRecognizerTurnCoordinator) throws {
         try coordinator.clientEndpoint.start { _ in }
         try coordinator.userEndpoint.start { _ in }
@@ -160,6 +208,12 @@ final class SingleRecognizerTurnSchedulerTests: XCTestCase {
             buffer.floatChannelData?[0][index] = amplitude
         }
         return buffer
+    }
+
+    private func overwriteSamples(in buffer: AVAudioPCMBuffer, with amplitude: Float) {
+        for index in 0 ..< Int(buffer.frameLength) {
+            buffer.floatChannelData?[0][index] = amplitude
+        }
     }
 }
 

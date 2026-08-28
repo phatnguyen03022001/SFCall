@@ -44,11 +44,12 @@ public final class LiveCallSessionRuntime: @unchecked Sendable {
         source: AudioProcessSource,
         localeIdentifier: String = "en-US"
     ) -> LiveCallSessionRuntime {
-        LiveCallSessionRuntime(
+        let coordinator = SingleRecognizerTurnCoordinator(localeIdentifier: localeIdentifier)
+        return LiveCallSessionRuntime(
             remoteAudio: CoreAudioProcessTapCapture(source: source),
             microphoneAudio: MicrophoneCapture(),
-            remoteSpeech: AppleSpeechTranscriber(localeIdentifier: localeIdentifier),
-            microphoneSpeech: AppleSpeechTranscriber(localeIdentifier: localeIdentifier)
+            remoteSpeech: coordinator.clientEndpoint,
+            microphoneSpeech: coordinator.userEndpoint
         )
     }
 }

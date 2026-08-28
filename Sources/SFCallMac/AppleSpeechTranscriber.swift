@@ -42,8 +42,12 @@ public enum AppleSpeechTranscriberError: Error {
 public final class AppleSpeechTranscriber {
     private let recognizer: SFSpeechRecognizer?
     private let diagnosticsLock = NSLock()
+    private let recognitionLock = NSLock()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    private var acceptsAudio = false
+    private var onTaskCompletion: (() -> Void)?
+    private var onGracefulFinish: (() -> Void)?
     private var diagnosticTaskState = "notStarted"
     private var diagnosticErrorDomain: String?
     private var diagnosticErrorCode: Int?
@@ -62,6 +66,13 @@ public final class AppleSpeechTranscriber {
     }
 
     public func start(onTranscript: @escaping (AppleSpeechTranscript) -> Void) throws {
+        try start(onTranscript: onTranscript, onCompletion: {})
+    }
+
+    func start(
+        onTranscript: @escaping (AppleSpeechTranscript) -> Void,
+        onCompletion: @escaping () -> Void
+    ) throws {
         guard SFSpeechRecognizer.authorizationStatus() == .authorized else {
             throw AppleSpeechTranscriberError.notAuthorized
         }
@@ -78,7 +89,11 @@ public final class AppleSpeechTranscriber {
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
         request.requiresOnDeviceRecognition = true
+        recognitionLock.lock()
         self.request = request
+        acceptsAudio = true
+        onTaskCompletion = onCompletion
+        recognitionLock.unlock()
 
         let recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             if let result {
@@ -90,24 +105,35 @@ public final class AppleSpeechTranscriber {
                     )
                 )
                 if result.isFinal {
-                    self?.request = nil
-                    self?.task = nil
+                    self?.completeRecognition()
                 }
             } else if let error {
                 self?.record(error: error)
-                self?.request = nil
-                self?.task = nil
+                self?.completeRecognition()
             }
         }
-        task = recognitionTask
+        recognitionLock.lock()
+        if self.request === request {
+            task = recognitionTask
+            recognitionLock.unlock()
+        } else {
+            recognitionLock.unlock()
+            recognitionTask.cancel()
+        }
         recordInitialTaskState(Self.taskStateText(recognitionTask.state))
     }
 
     public func append(sampleBuffer: CMSampleBuffer) {
+        recognitionLock.lock()
+        let request = acceptsAudio ? request : nil
+        recognitionLock.unlock()
         request?.appendAudioSampleBuffer(sampleBuffer)
     }
 
     public func append(pcmBuffer: AVAudioPCMBuffer) {
+        recognitionLock.lock()
+        let request = acceptsAudio ? request : nil
+        recognitionLock.unlock()
         request?.append(pcmBuffer)
     }
 
@@ -124,10 +150,46 @@ public final class AppleSpeechTranscriber {
     }
 
     public func stop() {
+        recognitionLock.lock()
+        let request = self.request
+        let task = self.task
+        self.request = nil
+        self.task = nil
+        acceptsAudio = false
+        onTaskCompletion = nil
+        onGracefulFinish = nil
+        recognitionLock.unlock()
         request?.endAudio()
         task?.cancel()
+    }
+
+    func finish(completion: @escaping () -> Void) {
+        recognitionLock.lock()
+        guard let request else {
+            recognitionLock.unlock()
+            completion()
+            return
+        }
+        let task = self.task
+        acceptsAudio = false
+        onGracefulFinish = completion
+        recognitionLock.unlock()
+        request.endAudio()
+        task?.finish()
+    }
+
+    private func completeRecognition() {
+        recognitionLock.lock()
         request = nil
         task = nil
+        acceptsAudio = false
+        let taskCompletion = onTaskCompletion
+        let gracefulFinish = onGracefulFinish
+        onTaskCompletion = nil
+        onGracefulFinish = nil
+        recognitionLock.unlock()
+        taskCompletion?()
+        gracefulFinish?()
     }
 
     private func resetDiagnostics() {

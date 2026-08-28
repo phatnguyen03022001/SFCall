@@ -43,4 +43,22 @@ final class LiveCallRoutingTests: XCTestCase {
         XCTAssertNil(request)
         XCTAssertEqual(router.recentTurns, [ConversationTurn(speaker: .user, text: "Let me check that.")])
     }
+
+    func testSpeakerTransitionsRemainDistinctInRecentTurns() {
+        let baseline = CaseBaseline(version: 0, requirements: [])
+        let router = LiveCallRouter(maxRecentTurns: 6)
+
+        _ = router.ingestRemote(text: "CLIENT A", isFinal: true, baseline: baseline, clientFacts: [])
+        _ = router.ingestMicrophone(text: "USER B", isFinal: true, baseline: baseline, clientFacts: [])
+        _ = router.ingestRemote(text: "CLIENT C", isFinal: true, baseline: baseline, clientFacts: [])
+
+        XCTAssertEqual(
+            router.recentTurns,
+            [
+                ConversationTurn(speaker: .client, text: "CLIENT A"),
+                ConversationTurn(speaker: .user, text: "USER B"),
+                ConversationTurn(speaker: .client, text: "CLIENT C"),
+            ]
+        )
+    }
 }

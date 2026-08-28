@@ -43,6 +43,81 @@ final class CallPipelineTests: XCTestCase {
         XCTAssertEqual(request?.recentTurns.map(\.speaker), [.user, .client])
     }
 
+    func testEightConsecutiveUserFinalsRemainOneContextTurnForNextClientRequest() {
+        let coordinator = CallTurnCoordinator()
+        let baseline = CaseBaseline(version: 0, requirements: [])
+        let userFragments = [
+            "I can deliver",
+            "the first milestone",
+            "next Friday",
+            "but I cannot",
+            "commit to",
+            "the full scope",
+            "at this",
+            "price",
+        ]
+
+        for fragment in userFragments {
+            XCTAssertNil(
+                coordinator.ingest(
+                    speaker: .user,
+                    text: fragment,
+                    isFinal: true,
+                    baseline: baseline,
+                    clientFacts: []
+                )
+            )
+        }
+
+        let request = coordinator.ingest(
+            speaker: .client,
+            text: "Can you reduce the price?",
+            isFinal: true,
+            baseline: baseline,
+            clientFacts: []
+        )
+
+        XCTAssertEqual(
+            request?.recentTurns,
+            [
+                ConversationTurn(
+                    speaker: .user,
+                    text: "I can deliver the first milestone next Friday but I cannot commit to the full scope at this price"
+                ),
+                ConversationTurn(speaker: .client, text: "Can you reduce the price?"),
+            ]
+        )
+    }
+
+    func testConsecutiveClientFinalsCoalesceContextWhileEachStillCreatesRequest() {
+        let router = LiveCallRouter()
+        let baseline = CaseBaseline(version: 0, requirements: [])
+
+        let firstRequest = router.ingestRemote(
+            text: "We need",
+            isFinal: true,
+            baseline: baseline,
+            clientFacts: []
+        )
+        let secondRequest = router.ingestRemote(
+            text: "delivery Friday",
+            isFinal: true,
+            baseline: baseline,
+            clientFacts: []
+        )
+
+        XCTAssertEqual(firstRequest?.clientSaid, "We need")
+        XCTAssertEqual(secondRequest?.clientSaid, "delivery Friday")
+        XCTAssertEqual(
+            secondRequest?.recentTurns,
+            [ConversationTurn(speaker: .client, text: "We need delivery Friday")]
+        )
+        XCTAssertEqual(
+            router.recentTurns,
+            [ConversationTurn(speaker: .client, text: "We need delivery Friday")]
+        )
+    }
+
     func testSpokenReplyContractDefaultsToShortA2B1Assistance() {
         let policy = SpokenReplyPolicy()
         XCTAssertEqual(policy.maxSentences, 3)

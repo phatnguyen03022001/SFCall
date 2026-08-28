@@ -83,5 +83,19 @@ final class NativeSmokeTests: XCTestCase {
         let decoded = try JSONDecoder().decode(NativeSmokeReport.self, from: data)
         XCTAssertEqual(decoded, report)
     }
+
+    func testHostSmokeLaunchIsOwnedByApplicationLifecycle() throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let appSourceURL = repositoryRoot
+            .appendingPathComponent("Sources/SFCallHost/SFCallHostApp.swift")
+        let source = try String(contentsOf: appSourceURL, encoding: .utf8)
+
+        XCTAssertTrue(source.contains("@NSApplicationDelegateAdaptor"))
+        XCTAssertTrue(source.contains("applicationDidFinishLaunching"))
+        XCTAssertFalse(source.contains(".task {"))
+    }
 }
 #endif

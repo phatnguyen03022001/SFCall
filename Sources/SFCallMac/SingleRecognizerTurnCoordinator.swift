@@ -58,7 +58,6 @@ public final class SingleRecognizerTurnCoordinator {
         let engine: any SingleRecognizerTurnRecognition
     }
 
-    private static let activityRMS: Float = 0.015
     private static let activityConfirmation: TimeInterval = 0.15
     private static let releaseSilence: TimeInterval = 0.50
     private static let preRollDuration: TimeInterval = 0.30
@@ -136,7 +135,7 @@ public final class SingleRecognizerTurnCoordinator {
 
     fileprivate func append(_ buffer: AVAudioPCMBuffer, from speaker: Speaker) {
         let capturedAt = now()
-        let isActive = Self.rms(of: buffer) >= Self.activityRMS
+        let isActive = Self.rms(of: buffer) >= Self.activityThreshold(for: speaker)
         let duration = Self.duration(of: buffer)
         var engineToAppend: (any SingleRecognizerTurnRecognition)?
         var turnToStart: Speaker?
@@ -408,6 +407,13 @@ public final class SingleRecognizerTurnCoordinator {
             }
         }
         return sqrt(sum / Float(Int(buffer.frameLength) * channelCount))
+    }
+
+    private static func activityThreshold(for speaker: Speaker) -> Float {
+        switch speaker {
+        case .client: 0.015
+        case .user: 0.003
+        }
     }
 
     private static func name(of speaker: Speaker) -> String {

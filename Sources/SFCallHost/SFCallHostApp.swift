@@ -6,6 +6,7 @@ import SwiftUI
 @main
 @MainActor
 struct SFCallHostApp: App {
+    @NSApplicationDelegateAdaptor(SFCallHostAppDelegate.self) private var appDelegate
     @StateObject private var model: HostViewModel
     private let smokeConfiguration: NativeSmokeConfiguration?
 
@@ -19,9 +20,14 @@ struct SFCallHostApp: App {
 
     var body: some Scene {
         WindowGroup("SFCall Host") {
-            if let smokeConfiguration {
-                NativeSmokeLaunchView(configuration: smokeConfiguration)
-                    .frame(width: 420, height: 120)
+            if smokeConfiguration != nil {
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text("SFCall native verification is running…")
+                        .font(.callout)
+                }
+                .padding(20)
+                .frame(width: 420, height: 120)
             } else {
                 HostContentView(model: model)
                     .frame(minWidth: 620, minHeight: 420)
@@ -32,21 +38,17 @@ struct SFCallHostApp: App {
 }
 
 @MainActor
-private struct NativeSmokeLaunchView: View {
-    let configuration: NativeSmokeConfiguration
-    @State private var started = false
+private final class SFCallHostAppDelegate: NSObject, NSApplicationDelegate {
+    private var smokeTask: Task<Void, Never>?
 
-    var body: some View {
-        VStack(spacing: 10) {
-            ProgressView()
-            Text("SFCall native verification is running…")
-                .font(.callout)
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        guard let configuration = try? NativeSmokeConfiguration.parse(
+            ProcessInfo.processInfo.arguments
+        ), let configuration else {
+            return
         }
-        .padding(20)
-        .task {
-            guard !started else { return }
-            started = true
 
+        smokeTask = Task { @MainActor in
             let report = await NativeSmokeRunner().run(configuration)
 
             do {

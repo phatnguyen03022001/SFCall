@@ -47,15 +47,7 @@ private struct NativeSmokeLaunchView: View {
             guard !started else { return }
             started = true
 
-            let report: NativeSmokeReport
-            do {
-                report = await try NativeSmokeRunner().run(configuration)
-            } catch {
-                report = NativeSmokeReport(
-                    result: "RUNTIME_FAIL",
-                    firstFailure: error.localizedDescription
-                )
-            }
+            let report = await NativeSmokeRunner().run(configuration)
 
             do {
                 try report.write(to: configuration.outputURL)

@@ -759,7 +759,6 @@ private final class NativeSmokeAudioDiagnostics: @unchecked Sendable {
 
     private static func commonFormatName(_ format: AVAudioCommonFormat) -> String {
         switch format {
-        case .pcmFormatOther: "pcmFormatOther"
         case .pcmFormatFloat32: "pcmFormatFloat32"
         case .pcmFormatFloat64: "pcmFormatFloat64"
         case .pcmFormatInt16: "pcmFormatInt16"
@@ -823,9 +822,6 @@ private final class NativeSmokeAudioDiagnostics: @unchecked Sendable {
                 }
                 sampleCount += count
             }
-
-        case .pcmFormatOther:
-            return 0
 
         @unknown default:
             return 0

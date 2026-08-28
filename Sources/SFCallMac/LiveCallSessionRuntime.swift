@@ -43,17 +43,32 @@ public final class LiveCallSessionRuntime: @unchecked Sendable {
     public static func native(
         source: AudioProcessSource,
         localeIdentifier: String = "en-US"
-    ) -> LiveCallSessionRuntime {
-        LiveCallSessionRuntime(
+    ) async throws -> LiveCallSessionRuntime {
+        let remoteSpeech = try await SpeechAnalyzerTranscriber.prepare(
+            localeIdentifier: localeIdentifier
+        )
+
+        let microphoneSpeech: SpeechAnalyzerTranscriber
+        do {
+            microphoneSpeech = try await SpeechAnalyzerTranscriber.prepare(
+                localeIdentifier: localeIdentifier
+            )
+        } catch {
+            remoteSpeech.stop()
+            throw error
+        }
+
+        return LiveCallSessionRuntime(
             remoteAudio: CoreAudioProcessTapCapture(source: source),
             microphoneAudio: MicrophoneCapture(),
-            remoteSpeech: AppleSpeechTranscriber(localeIdentifier: localeIdentifier),
-            microphoneSpeech: AppleSpeechTranscriber(localeIdentifier: localeIdentifier)
+            remoteSpeech: remoteSpeech,
+            microphoneSpeech: microphoneSpeech
         )
     }
 }
 
 extension MicrophoneCapture: LiveCallMicrophoneAudioSource {}
 extension AppleSpeechTranscriber: LiveCallSpeechTranscribing {}
+extension SpeechAnalyzerTranscriber: LiveCallSpeechTranscribing {}
 extension CoreAudioProcessTapCapture: LiveCallRemoteAudioSource {}
 #endif

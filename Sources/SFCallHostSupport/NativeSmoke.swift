@@ -104,6 +104,14 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
     public var remotePCMFrameCount: Int
     public var microphonePCMBufferCount: Int
     public var microphonePCMFrameCount: Int
+    public var remoteSpeechTaskState: String
+    public var remoteSpeechErrorDomain: String?
+    public var remoteSpeechErrorCode: Int?
+    public var remoteSpeechErrorMessage: String?
+    public var microphoneSpeechTaskState: String
+    public var microphoneSpeechErrorDomain: String?
+    public var microphoneSpeechErrorCode: Int?
+    public var microphoneSpeechErrorMessage: String?
     public var clientPartials: [String]
     public var userPartials: [String]
     public var clientFinals: [String]
@@ -133,6 +141,14 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
         remotePCMFrameCount: Int = 0,
         microphonePCMBufferCount: Int = 0,
         microphonePCMFrameCount: Int = 0,
+        remoteSpeechTaskState: String = "notObserved",
+        remoteSpeechErrorDomain: String? = nil,
+        remoteSpeechErrorCode: Int? = nil,
+        remoteSpeechErrorMessage: String? = nil,
+        microphoneSpeechTaskState: String = "notObserved",
+        microphoneSpeechErrorDomain: String? = nil,
+        microphoneSpeechErrorCode: Int? = nil,
+        microphoneSpeechErrorMessage: String? = nil,
         clientPartials: [String] = [],
         userPartials: [String] = [],
         clientFinals: [String] = [],
@@ -161,6 +177,14 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
         self.remotePCMFrameCount = remotePCMFrameCount
         self.microphonePCMBufferCount = microphonePCMBufferCount
         self.microphonePCMFrameCount = microphonePCMFrameCount
+        self.remoteSpeechTaskState = remoteSpeechTaskState
+        self.remoteSpeechErrorDomain = remoteSpeechErrorDomain
+        self.remoteSpeechErrorCode = remoteSpeechErrorCode
+        self.remoteSpeechErrorMessage = remoteSpeechErrorMessage
+        self.microphoneSpeechTaskState = microphoneSpeechTaskState
+        self.microphoneSpeechErrorDomain = microphoneSpeechErrorDomain
+        self.microphoneSpeechErrorCode = microphoneSpeechErrorCode
+        self.microphoneSpeechErrorMessage = microphoneSpeechErrorMessage
         self.clientPartials = clientPartials
         self.userPartials = userPartials
         self.clientFinals = clientFinals
@@ -327,6 +351,8 @@ public final class NativeSmokeRunner {
             }
         )
 
+        let remoteSpeech = AppleSpeechTranscriber(localeIdentifier: "en-US")
+        let microphoneSpeech = AppleSpeechTranscriber(localeIdentifier: "en-US")
         let runtime = LiveCallSessionRuntime(
             remoteAudio: NativeSmokeRemoteAudioProbe(
                 source: source,
@@ -335,8 +361,8 @@ public final class NativeSmokeRunner {
             microphoneAudio: NativeSmokeMicrophoneAudioProbe(
                 diagnostics: audioDiagnostics
             ),
-            remoteSpeech: AppleSpeechTranscriber(localeIdentifier: "en-US"),
-            microphoneSpeech: AppleSpeechTranscriber(localeIdentifier: "en-US")
+            remoteSpeech: remoteSpeech,
+            microphoneSpeech: microphoneSpeech
         )
 
         let started: Bool = await withCheckedContinuation { continuation in
@@ -352,6 +378,8 @@ public final class NativeSmokeRunner {
         }
 
         guard started else {
+            let remoteSpeechDiagnostics = remoteSpeech.diagnosticSnapshot()
+            let microphoneSpeechDiagnostics = microphoneSpeech.diagnosticSnapshot()
             session.stop()
             let audio = audioDiagnostics.snapshot()
             return NativeSmokeReport(
@@ -363,6 +391,14 @@ public final class NativeSmokeRunner {
                 remotePCMFrameCount: audio.remoteFrameCount,
                 microphonePCMBufferCount: audio.microphoneBufferCount,
                 microphonePCMFrameCount: audio.microphoneFrameCount,
+                remoteSpeechTaskState: remoteSpeechDiagnostics.taskState,
+                remoteSpeechErrorDomain: remoteSpeechDiagnostics.errorDomain,
+                remoteSpeechErrorCode: remoteSpeechDiagnostics.errorCode,
+                remoteSpeechErrorMessage: remoteSpeechDiagnostics.errorMessage,
+                microphoneSpeechTaskState: microphoneSpeechDiagnostics.taskState,
+                microphoneSpeechErrorDomain: microphoneSpeechDiagnostics.errorDomain,
+                microphoneSpeechErrorCode: microphoneSpeechDiagnostics.errorCode,
+                microphoneSpeechErrorMessage: microphoneSpeechDiagnostics.errorMessage,
                 clientPartials: observation.clientPartials,
                 userPartials: observation.userPartials,
                 clientFinals: observation.clientFinals,
@@ -374,6 +410,8 @@ public final class NativeSmokeRunner {
         }
 
         try? await Task.sleep(for: .seconds(seconds))
+        let remoteSpeechDiagnostics = remoteSpeech.diagnosticSnapshot()
+        let microphoneSpeechDiagnostics = microphoneSpeech.diagnosticSnapshot()
         session.stop()
         observation.stopCleanup = true
 
@@ -425,6 +463,14 @@ public final class NativeSmokeRunner {
             remotePCMFrameCount: audio.remoteFrameCount,
             microphonePCMBufferCount: audio.microphoneBufferCount,
             microphonePCMFrameCount: audio.microphoneFrameCount,
+            remoteSpeechTaskState: remoteSpeechDiagnostics.taskState,
+            remoteSpeechErrorDomain: remoteSpeechDiagnostics.errorDomain,
+            remoteSpeechErrorCode: remoteSpeechDiagnostics.errorCode,
+            remoteSpeechErrorMessage: remoteSpeechDiagnostics.errorMessage,
+            microphoneSpeechTaskState: microphoneSpeechDiagnostics.taskState,
+            microphoneSpeechErrorDomain: microphoneSpeechDiagnostics.errorDomain,
+            microphoneSpeechErrorCode: microphoneSpeechDiagnostics.errorCode,
+            microphoneSpeechErrorMessage: microphoneSpeechDiagnostics.errorMessage,
             clientPartials: observation.clientPartials,
             userPartials: observation.userPartials,
             clientFinals: observation.clientFinals,

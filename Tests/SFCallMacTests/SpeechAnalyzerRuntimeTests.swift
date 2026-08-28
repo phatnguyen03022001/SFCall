@@ -3,7 +3,7 @@ import XCTest
 @testable import SFCallMac
 
 final class SpeechAnalyzerRuntimeTests: XCTestCase {
-    func testNativeRuntimeUsesIndependentSpeechAnalyzerTranscribers() {
+    func testNativeRuntimeUsesIndependentSpeechAnalyzerTranscribers() async throws {
         let source = AudioProcessSource(
             id: 42,
             pid: 4_242,
@@ -12,7 +12,7 @@ final class SpeechAnalyzerRuntimeTests: XCTestCase {
             isRunningOutput: true
         )
 
-        let runtime = LiveCallSessionRuntime.native(source: source)
+        let runtime = try await LiveCallSessionRuntime.native(source: source)
         let remote = runtime.remoteSpeech as? SpeechAnalyzerTranscriber
         let microphone = runtime.microphoneSpeech as? SpeechAnalyzerTranscriber
 

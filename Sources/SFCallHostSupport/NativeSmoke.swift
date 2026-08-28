@@ -100,6 +100,12 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
     public var speechPermission: String
     public var systemAudioStarted: Bool
     public var runtimeStarted: Bool
+    public var remotePCMBufferCount: Int
+    public var remotePCMFrameCount: Int
+    public var microphonePCMBufferCount: Int
+    public var microphonePCMFrameCount: Int
+    public var clientPartials: [String]
+    public var userPartials: [String]
     public var clientFinals: [String]
     public var userFinals: [String]
     public var clientRequestCount: Int
@@ -123,6 +129,12 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
         speechPermission: String = "notObserved",
         systemAudioStarted: Bool = false,
         runtimeStarted: Bool = false,
+        remotePCMBufferCount: Int = 0,
+        remotePCMFrameCount: Int = 0,
+        microphonePCMBufferCount: Int = 0,
+        microphonePCMFrameCount: Int = 0,
+        clientPartials: [String] = [],
+        userPartials: [String] = [],
         clientFinals: [String] = [],
         userFinals: [String] = [],
         clientRequestCount: Int = 0,
@@ -145,6 +157,12 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
         self.speechPermission = speechPermission
         self.systemAudioStarted = systemAudioStarted
         self.runtimeStarted = runtimeStarted
+        self.remotePCMBufferCount = remotePCMBufferCount
+        self.remotePCMFrameCount = remotePCMFrameCount
+        self.microphonePCMBufferCount = microphonePCMBufferCount
+        self.microphonePCMFrameCount = microphonePCMFrameCount
+        self.clientPartials = clientPartials
+        self.userPartials = userPartials
         self.clientFinals = clientFinals
         self.userFinals = userFinals
         self.clientRequestCount = clientRequestCount
@@ -265,6 +283,7 @@ public final class NativeSmokeRunner {
         }
 
         let observation = NativeSmokeObservation()
+        let audioDiagnostics = NativeSmokeAudioDiagnostics()
         let hud = NativeSmokeHUD(observation: observation)
         let sessionID = prepared.session.id
         let session = LiveCallHUDSession(
@@ -290,28 +309,38 @@ public final class NativeSmokeRunner {
                 )
             },
             onTranscriptTurn: { [historyStore] speaker, text, isFinal in
-                guard isFinal else { return }
-                switch speaker {
-                case .client:
-                    observation.clientFinals.append(text)
-                case .user:
-                    observation.userFinals.append(text)
-                }
-                do {
-                    try historyStore.appendTranscriptTurn(
-                        sessionID: sessionID,
-                        speaker: speaker,
-                        text: text,
-                        isFinal: true
-                    )
-                } catch {
-                    observation.historyFailure = Self.message(for: error)
+                if isFinal {
+                    observation.recordFinal(speaker: speaker, text: text)
+                    do {
+                        try historyStore.appendTranscriptTurn(
+                            sessionID: sessionID,
+                            speaker: speaker,
+                            text: text,
+                            isFinal: true
+                        )
+                    } catch {
+                        observation.historyFailure = Self.message(for: error)
+                    }
+                } else {
+                    observation.recordPartial(speaker: speaker, text: text)
                 }
             }
         )
 
+        let runtime = LiveCallSessionRuntime(
+            remoteAudio: NativeSmokeRemoteAudioProbe(
+                source: source,
+                diagnostics: audioDiagnostics
+            ),
+            microphoneAudio: NativeSmokeMicrophoneAudioProbe(
+                diagnostics: audioDiagnostics
+            ),
+            remoteSpeech: AppleSpeechTranscriber(localeIdentifier: "en-US"),
+            microphoneSpeech: AppleSpeechTranscriber(localeIdentifier: "en-US")
+        )
+
         let started: Bool = await withCheckedContinuation { continuation in
-            session.start(source: source, localeIdentifier: "en-US") { result in
+            session.start(runtime: runtime) { result in
                 switch result {
                 case .success:
                     continuation.resume(returning: true)
@@ -324,11 +353,20 @@ public final class NativeSmokeRunner {
 
         guard started else {
             session.stop()
+            let audio = audioDiagnostics.snapshot()
             return NativeSmokeReport(
                 result: "RUNTIME_FAIL",
                 processes: processes,
                 microphonePermission: "authorized",
                 speechPermission: "authorized",
+                remotePCMBufferCount: audio.remoteBufferCount,
+                remotePCMFrameCount: audio.remoteFrameCount,
+                microphonePCMBufferCount: audio.microphoneBufferCount,
+                microphonePCMFrameCount: audio.microphoneFrameCount,
+                clientPartials: observation.clientPartials,
+                userPartials: observation.userPartials,
+                clientFinals: observation.clientFinals,
+                userFinals: observation.userFinals,
                 intelligenceState: Self.intelligenceState,
                 stopCleanup: true,
                 firstFailure: observation.startFailure ?? "Runtime start failed."
@@ -355,6 +393,7 @@ public final class NativeSmokeRunner {
         let persistedUser = persistedTurns.filter { $0.speaker == .user && $0.isFinal }.count
         let advice = observation.latestAdvice
         let intelligence = Self.intelligenceState
+        let audio = audioDiagnostics.snapshot()
 
         let result: String
         let failure: String?
@@ -363,7 +402,7 @@ public final class NativeSmokeRunner {
             failure = "History persistence failed — \(historyFailure)"
         } else if observation.clientFinals.isEmpty || observation.userFinals.isEmpty {
             result = "BLOCKED_INPUT"
-            failure = "Both a final CLIENT process-audio turn and a final USER microphone turn were not observed."
+            failure = Self.inputFailure(observation: observation, audio: audio)
         } else if intelligence != "available" {
             result = "BLOCKED_INTELLIGENCE"
             failure = observation.adviceFailure ?? "Apple Intelligence is \(intelligence)."
@@ -382,6 +421,12 @@ public final class NativeSmokeRunner {
             speechPermission: "authorized",
             systemAudioStarted: true,
             runtimeStarted: true,
+            remotePCMBufferCount: audio.remoteBufferCount,
+            remotePCMFrameCount: audio.remoteFrameCount,
+            microphonePCMBufferCount: audio.microphoneBufferCount,
+            microphonePCMFrameCount: audio.microphoneFrameCount,
+            clientPartials: observation.clientPartials,
+            userPartials: observation.userPartials,
             clientFinals: observation.clientFinals,
             userFinals: observation.userFinals,
             clientRequestCount: observation.clientRequestCount,
@@ -439,6 +484,25 @@ public final class NativeSmokeRunner {
         )
     }
 
+    private static func inputFailure(
+        observation: NativeSmokeObservation,
+        audio: NativeSmokeAudioSnapshot
+    ) -> String {
+        if audio.remoteBufferCount == 0 && audio.microphoneBufferCount == 0 {
+            return "No PCM buffers reached either Speech input."
+        }
+        if audio.remoteBufferCount == 0 {
+            return "No PCM buffers reached CLIENT Speech from the selected process."
+        }
+        if audio.microphoneBufferCount == 0 {
+            return "No PCM buffers reached USER Speech from the microphone."
+        }
+        if !observation.clientPartials.isEmpty || !observation.userPartials.isEmpty {
+            return "Speech hypotheses were observed, but both required final CLIENT and USER turns were not produced."
+        }
+        return "PCM buffers reached Speech, but no transcript hypotheses were observed for both required channels."
+    }
+
     private static func microphoneText(_ status: AVAuthorizationStatus) -> String {
         switch status {
         case .notDetermined: "notDetermined"
@@ -469,8 +533,98 @@ public final class NativeSmokeRunner {
     }
 }
 
+private struct NativeSmokeAudioSnapshot: Sendable {
+    let remoteBufferCount: Int
+    let remoteFrameCount: Int
+    let microphoneBufferCount: Int
+    let microphoneFrameCount: Int
+}
+
+private final class NativeSmokeAudioDiagnostics: @unchecked Sendable {
+    private let lock = NSLock()
+    private var remoteBufferCount = 0
+    private var remoteFrameCount = 0
+    private var microphoneBufferCount = 0
+    private var microphoneFrameCount = 0
+
+    func recordRemote(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        remoteBufferCount += 1
+        remoteFrameCount += Int(buffer.frameLength)
+        lock.unlock()
+    }
+
+    func recordMicrophone(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        microphoneBufferCount += 1
+        microphoneFrameCount += Int(buffer.frameLength)
+        lock.unlock()
+    }
+
+    func snapshot() -> NativeSmokeAudioSnapshot {
+        lock.lock()
+        let snapshot = NativeSmokeAudioSnapshot(
+            remoteBufferCount: remoteBufferCount,
+            remoteFrameCount: remoteFrameCount,
+            microphoneBufferCount: microphoneBufferCount,
+            microphoneFrameCount: microphoneFrameCount
+        )
+        lock.unlock()
+        return snapshot
+    }
+}
+
+private final class NativeSmokeRemoteAudioProbe: LiveCallRemoteAudioSource {
+    private let base: CoreAudioProcessTapCapture
+    private let diagnostics: NativeSmokeAudioDiagnostics
+
+    init(source: AudioProcessSource, diagnostics: NativeSmokeAudioDiagnostics) {
+        self.base = CoreAudioProcessTapCapture(source: source)
+        self.diagnostics = diagnostics
+    }
+
+    func start(
+        onAudio: @escaping (AVAudioPCMBuffer) -> Void,
+        completion: @escaping @Sendable (Error?) -> Void
+    ) {
+        base.start(
+            onAudio: { [diagnostics] buffer in
+                diagnostics.recordRemote(buffer)
+                onAudio(buffer)
+            },
+            completion: completion
+        )
+    }
+
+    func stop(completion: (@Sendable () -> Void)?) {
+        base.stop(completion: completion)
+    }
+}
+
+private final class NativeSmokeMicrophoneAudioProbe: LiveCallMicrophoneAudioSource {
+    private let base = MicrophoneCapture()
+    private let diagnostics: NativeSmokeAudioDiagnostics
+
+    init(diagnostics: NativeSmokeAudioDiagnostics) {
+        self.diagnostics = diagnostics
+    }
+
+    func start(onBuffer: @escaping (AVAudioPCMBuffer) -> Void) throws {
+        try base.start { [diagnostics] buffer in
+            diagnostics.recordMicrophone(buffer)
+            onBuffer(buffer)
+        }
+    }
+
+    func stop() {
+        base.stop()
+    }
+}
+
 @MainActor
 private final class NativeSmokeObservation {
+    var clientPartials: [String] = []
+    var userPartials: [String] = []
     var clientFinals: [String] = []
     var userFinals: [String] = []
     var clientRequestCount = 0
@@ -482,6 +636,34 @@ private final class NativeSmokeObservation {
     var stopCleanup = false
     var adviceTasks: [Task<Void, Never>] = []
     var lastHUD = PrivateHUDContent()
+
+    func recordPartial(speaker: TranscriptSpeaker, text: String) {
+        guard !text.isEmpty else { return }
+        switch speaker {
+        case .client:
+            appendBounded(text, to: &clientPartials)
+        case .user:
+            appendBounded(text, to: &userPartials)
+        }
+    }
+
+    func recordFinal(speaker: TranscriptSpeaker, text: String) {
+        guard !text.isEmpty else { return }
+        switch speaker {
+        case .client:
+            clientFinals.append(text)
+        case .user:
+            userFinals.append(text)
+        }
+    }
+
+    private func appendBounded(_ text: String, to values: inout [String]) {
+        guard values.last != text else { return }
+        values.append(text)
+        if values.count > 20 {
+            values.removeFirst(values.count - 20)
+        }
+    }
 }
 
 @MainActor

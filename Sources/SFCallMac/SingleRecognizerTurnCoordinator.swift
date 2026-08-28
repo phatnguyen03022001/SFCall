@@ -143,6 +143,7 @@ public final class SingleRecognizerTurnCoordinator {
         var turnToFinish: ActiveTurn?
 
         lock.lock()
+        resetActivityIfReleased(for: speaker, at: capturedAt)
         record(buffer, capturedAt: capturedAt, duration: duration, for: speaker)
         if isActive {
             var observed = activity[speaker] ?? Activity()
@@ -298,11 +299,21 @@ public final class SingleRecognizerTurnCoordinator {
         duration: TimeInterval,
         for speaker: Speaker
     ) {
+        guard let ownedBuffer = Self.copyForPreRoll(buffer) else { return }
         var buffers = preRoll[speaker] ?? []
-        buffers.append(TimedBuffer(capturedAt: capturedAt, duration: duration, buffer: buffer))
+        buffers.append(TimedBuffer(capturedAt: capturedAt, duration: duration, buffer: ownedBuffer))
         let cutoff = capturedAt - Self.preRollDuration
         buffers.removeAll { $0.capturedAt + $0.duration <= cutoff }
         preRoll[speaker] = buffers
+    }
+
+    private func resetActivityIfReleased(for speaker: Speaker, at time: TimeInterval) {
+        guard let lastObservedAt = activity[speaker]?.lastObservedAt,
+              time - lastObservedAt >= Self.releaseSilence
+        else {
+            return
+        }
+        activity[speaker] = Activity()
     }
 
     private func preferredConfirmedSpeaker(at time: TimeInterval) -> Speaker? {
@@ -345,6 +356,35 @@ public final class SingleRecognizerTurnCoordinator {
     private static func duration(of buffer: AVAudioPCMBuffer) -> TimeInterval {
         guard buffer.format.sampleRate > 0 else { return 0 }
         return Double(buffer.frameLength) / buffer.format.sampleRate
+    }
+
+    private static func copyForPreRoll(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let copy = AVAudioPCMBuffer(
+            pcmFormat: buffer.format,
+            frameCapacity: buffer.frameLength
+        ) else {
+            return nil
+        }
+        copy.frameLength = buffer.frameLength
+
+        let sourceBuffers = UnsafeMutableAudioBufferListPointer(
+            UnsafeMutablePointer(mutating: buffer.audioBufferList)
+        )
+        let destinationBuffers = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
+        guard sourceBuffers.count == destinationBuffers.count else { return nil }
+
+        for index in sourceBuffers.indices {
+            let source = sourceBuffers[index]
+            let destination = destinationBuffers[index]
+            guard source.mDataByteSize <= destination.mDataByteSize else { return nil }
+            guard source.mDataByteSize == 0 || (source.mData != nil && destination.mData != nil) else {
+                return nil
+            }
+            if let sourceData = source.mData, let destinationData = destination.mData {
+                memcpy(destinationData, sourceData, Int(source.mDataByteSize))
+            }
+        }
+        return copy
     }
 
     private static func rms(of buffer: AVAudioPCMBuffer) -> Float {

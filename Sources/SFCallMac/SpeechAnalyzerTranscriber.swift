@@ -216,7 +216,8 @@ private final class SpeechAnalyzerPCMConverter {
         }
 
         if status == .error || conversionError != nil {
-            throw conversionError ?? SpeechAnalyzerTranscriberError.conversionFailed
+            if let conversionError { throw conversionError }
+            throw SpeechAnalyzerTranscriberError.conversionFailed
         }
 
         guard outputBuffer.frameLength > 0 else { return [] }
@@ -245,7 +246,8 @@ private final class SpeechAnalyzerPCMConverter {
             }
 
             if status == .error || conversionError != nil {
-                throw conversionError ?? SpeechAnalyzerTranscriberError.conversionFailed
+                if let conversionError { throw conversionError }
+                throw SpeechAnalyzerTranscriberError.conversionFailed
             }
 
             if outputBuffer.frameLength > 0 {

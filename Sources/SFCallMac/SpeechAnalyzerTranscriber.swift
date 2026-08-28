@@ -8,12 +8,15 @@ public enum SpeechAnalyzerTranscriberError: Error {
     case unsupportedLocale
     case missingAudioFormat
     case invalidLifecycle
+    case converterUnavailable
+    case conversionFailed
+    case inputFormatChanged
 }
 
 public final class SpeechAnalyzerTranscriber: @unchecked Sendable {
     private let transcriber: SpeechTranscriber
     private let analyzer: SpeechAnalyzer
-    private let converter: AnalyzerInputConverter
+    private let converter: SpeechAnalyzerPCMConverter
     private let inputBuilder: AsyncStream<AnalyzerInput>.Continuation
     private let stateLock = NSLock()
 
@@ -26,7 +29,7 @@ public final class SpeechAnalyzerTranscriber: @unchecked Sendable {
     private init(
         transcriber: SpeechTranscriber,
         analyzer: SpeechAnalyzer,
-        converter: AnalyzerInputConverter,
+        converter: SpeechAnalyzerPCMConverter,
         inputBuilder: AsyncStream<AnalyzerInput>.Continuation
     ) {
         self.transcriber = transcriber
@@ -67,7 +70,7 @@ public final class SpeechAnalyzerTranscriber: @unchecked Sendable {
         }
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
-        let converter = AnalyzerInputConverter(analyzerFormat: analyzerFormat)
+        let converter = SpeechAnalyzerPCMConverter(analyzerFormat: analyzerFormat)
         let (inputSequence, inputBuilder) = AsyncStream<AnalyzerInput>.makeStream()
 
         try await analyzer.start(inputSequence: inputSequence)
@@ -110,9 +113,7 @@ public final class SpeechAnalyzerTranscriber: @unchecked Sendable {
                     )
                 }
             } catch {
-                // Runtime diagnostics can be added at the adapter boundary if
-                // native evidence shows they are needed. Recognition behavior
-                // remains fail-closed here.
+                // Recognition remains fail-closed at this adapter boundary.
             }
             self?.resultSequenceEnded()
         }
@@ -125,7 +126,7 @@ public final class SpeechAnalyzerTranscriber: @unchecked Sendable {
         guard acceptsInput, !didRequestFinish else { return }
 
         do {
-            for input in try converter.convert(pcmBuffer, at: nil) {
+            for input in try converter.convert(pcmBuffer) {
                 inputBuilder.yield(input)
             }
         } catch {
@@ -173,6 +174,128 @@ public final class SpeechAnalyzerTranscriber: @unchecked Sendable {
         onTranscript = nil
         resultsTask = nil
         stateLock.unlock()
+    }
+}
+
+private final class SpeechAnalyzerPCMConverter {
+    private let analyzerFormat: AVAudioFormat
+    private var converter: AVAudioConverter?
+    private var sourceFormat: AVAudioFormat?
+
+    init(analyzerFormat: AVAudioFormat) {
+        self.analyzerFormat = analyzerFormat
+    }
+
+    func convert(_ buffer: AVAudioPCMBuffer) throws -> [AnalyzerInput] {
+        let converter = try converter(for: buffer.format)
+        let outputCapacity = Self.outputCapacity(
+            inputFrames: buffer.frameLength,
+            inputSampleRate: buffer.format.sampleRate,
+            outputSampleRate: analyzerFormat.sampleRate
+        )
+        guard let outputBuffer = AVAudioPCMBuffer(
+            pcmFormat: analyzerFormat,
+            frameCapacity: outputCapacity
+        ) else {
+            throw SpeechAnalyzerTranscriberError.converterUnavailable
+        }
+
+        var didProvideInput = false
+        var conversionError: NSError?
+        let status = converter.convert(
+            to: outputBuffer,
+            error: &conversionError
+        ) { _, inputStatus in
+            guard !didProvideInput else {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            didProvideInput = true
+            inputStatus.pointee = .haveData
+            return buffer
+        }
+
+        if status == .error || conversionError != nil {
+            throw conversionError ?? SpeechAnalyzerTranscriberError.conversionFailed
+        }
+
+        guard outputBuffer.frameLength > 0 else { return [] }
+        return [AnalyzerInput(buffer: outputBuffer)]
+    }
+
+    func flush() throws -> [AnalyzerInput] {
+        guard let converter else { return [] }
+
+        var inputs: [AnalyzerInput] = []
+        for _ in 0..<8 {
+            guard let outputBuffer = AVAudioPCMBuffer(
+                pcmFormat: analyzerFormat,
+                frameCapacity: 4_096
+            ) else {
+                throw SpeechAnalyzerTranscriberError.converterUnavailable
+            }
+
+            var conversionError: NSError?
+            let status = converter.convert(
+                to: outputBuffer,
+                error: &conversionError
+            ) { _, inputStatus in
+                inputStatus.pointee = .endOfStream
+                return nil
+            }
+
+            if status == .error || conversionError != nil {
+                throw conversionError ?? SpeechAnalyzerTranscriberError.conversionFailed
+            }
+
+            if outputBuffer.frameLength > 0 {
+                inputs.append(AnalyzerInput(buffer: outputBuffer))
+            }
+
+            if status == .endOfStream || outputBuffer.frameLength == 0 {
+                break
+            }
+        }
+
+        return inputs
+    }
+
+    private func converter(for inputFormat: AVAudioFormat) throws -> AVAudioConverter {
+        if let converter, let sourceFormat {
+            guard Self.sameFormat(sourceFormat, inputFormat) else {
+                throw SpeechAnalyzerTranscriberError.inputFormatChanged
+            }
+            return converter
+        }
+
+        guard let converter = AVAudioConverter(
+            from: inputFormat,
+            to: analyzerFormat
+        ) else {
+            throw SpeechAnalyzerTranscriberError.converterUnavailable
+        }
+        self.converter = converter
+        sourceFormat = inputFormat
+        return converter
+    }
+
+    private static func sameFormat(_ lhs: AVAudioFormat, _ rhs: AVAudioFormat) -> Bool {
+        lhs.sampleRate == rhs.sampleRate
+            && lhs.channelCount == rhs.channelCount
+            && lhs.commonFormat == rhs.commonFormat
+            && lhs.isInterleaved == rhs.isInterleaved
+    }
+
+    private static func outputCapacity(
+        inputFrames: AVAudioFrameCount,
+        inputSampleRate: Double,
+        outputSampleRate: Double
+    ) -> AVAudioFrameCount {
+        guard inputSampleRate > 0, outputSampleRate > 0 else {
+            return max(inputFrames, 1)
+        }
+        let scaled = ceil(Double(inputFrames) * outputSampleRate / inputSampleRate)
+        return AVAudioFrameCount(max(scaled + 64, 1))
     }
 }
 #endif

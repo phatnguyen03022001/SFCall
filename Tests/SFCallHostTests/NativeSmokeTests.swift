@@ -25,6 +25,27 @@ final class NativeSmokeTests: XCTestCase {
 
         XCTAssertEqual(configuration?.mode, .run(pid: 4242, seconds: 45))
         XCTAssertEqual(configuration?.outputURL.path, "/tmp/sfcall-run.json")
+        XCTAssertEqual(configuration?.speechMode, .both)
+    }
+
+    func testRunSpeechModeParsesSingleRecognizerIsolation() throws {
+        let remote = try NativeSmokeConfiguration.parse([
+            "SFCallHost",
+            "--native-smoke-pid", "4242",
+            "--native-smoke-seconds", "45",
+            "--native-smoke-speech-mode", "remote",
+            "--native-smoke-output", "/tmp/sfcall-remote.json"
+        ])
+        let microphone = try NativeSmokeConfiguration.parse([
+            "SFCallHost",
+            "--native-smoke-pid", "4242",
+            "--native-smoke-seconds", "45",
+            "--native-smoke-speech-mode", "microphone",
+            "--native-smoke-output", "/tmp/sfcall-microphone.json"
+        ])
+
+        XCTAssertEqual(remote?.speechMode, .remoteOnly)
+        XCTAssertEqual(microphone?.speechMode, .microphoneOnly)
     }
 
     func testOrdinaryLaunchDoesNotEnterSmokeMode() throws {

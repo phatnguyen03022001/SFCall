@@ -44,7 +44,7 @@ private final class SFCallHostAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard let configuration = try? NativeSmokeConfiguration.parse(
             ProcessInfo.processInfo.arguments
-        ), let configuration else {
+        ) else {
             return
         }
 

@@ -11,12 +11,24 @@ public struct NativeSmokeConfiguration: Equatable, Sendable {
         case run(pid: pid_t, seconds: Int)
     }
 
+    public enum SpeechMode: Equatable, Sendable {
+        case both
+        case remoteOnly
+        case microphoneOnly
+    }
+
     public let mode: Mode
     public let outputURL: URL
+    public let speechMode: SpeechMode
 
-    public init(mode: Mode, outputURL: URL) {
+    public init(
+        mode: Mode,
+        outputURL: URL,
+        speechMode: SpeechMode = .both
+    ) {
         self.mode = mode
         self.outputURL = outputURL
+        self.speechMode = speechMode
     }
 
     public static func parse(_ arguments: [String]) throws -> NativeSmokeConfiguration? {
@@ -45,9 +57,26 @@ public struct NativeSmokeConfiguration: Equatable, Sendable {
             throw NativeSmokeConfigurationError.invalidDuration
         }
 
+        let speechMode: SpeechMode
+        if let rawSpeechMode = value(after: "--native-smoke-speech-mode", in: arguments) {
+            switch rawSpeechMode {
+            case "both":
+                speechMode = .both
+            case "remote":
+                speechMode = .remoteOnly
+            case "microphone":
+                speechMode = .microphoneOnly
+            default:
+                throw NativeSmokeConfigurationError.invalidSpeechMode
+            }
+        } else {
+            speechMode = .both
+        }
+
         return NativeSmokeConfiguration(
             mode: .run(pid: pid, seconds: seconds),
-            outputURL: outputURL
+            outputURL: outputURL,
+            speechMode: speechMode
         )
     }
 
@@ -64,6 +93,7 @@ public enum NativeSmokeConfigurationError: LocalizedError, Sendable {
     case conflictingModes
     case invalidPID
     case invalidDuration
+    case invalidSpeechMode
 
     public var errorDescription: String? {
         switch self {
@@ -75,6 +105,8 @@ public enum NativeSmokeConfigurationError: LocalizedError, Sendable {
             "--native-smoke-pid must be a positive process identifier."
         case .invalidDuration:
             "--native-smoke-seconds must be between 1 and 300."
+        case .invalidSpeechMode:
+            "--native-smoke-speech-mode must be both, remote, or microphone."
         }
     }
 }
@@ -286,7 +318,12 @@ public final class NativeSmokeRunner {
                         firstFailure: "Audio process PID \(pid) is unavailable."
                     )
                 }
-                return await runLive(source: source, seconds: seconds, processes: processes)
+                return await runLive(
+                    source: source,
+                    seconds: seconds,
+                    processes: processes,
+                    speechMode: configuration.speechMode
+                )
             }
         } catch {
             return NativeSmokeReport(
@@ -300,7 +337,8 @@ public final class NativeSmokeRunner {
     private func runLive(
         source: AudioProcessSource,
         seconds: Int,
-        processes: [NativeSmokeProcess]
+        processes: [NativeSmokeProcess],
+        speechMode: NativeSmokeConfiguration.SpeechMode
     ) async -> NativeSmokeReport {
         let permissions = await requestRequiredPermissions()
         guard permissions.microphone == .authorized, permissions.speech == .authorized else {
@@ -387,8 +425,35 @@ public final class NativeSmokeRunner {
             }
         )
 
-        let remoteSpeech = AppleSpeechTranscriber(localeIdentifier: "en-US")
-        let microphoneSpeech = AppleSpeechTranscriber(localeIdentifier: "en-US")
+        let remoteAppleSpeech: AppleSpeechTranscriber?
+        let microphoneAppleSpeech: AppleSpeechTranscriber?
+        let remoteSpeech: any LiveCallSpeechTranscribing
+        let microphoneSpeech: any LiveCallSpeechTranscribing
+
+        switch speechMode {
+        case .both:
+            let remote = AppleSpeechTranscriber(localeIdentifier: "en-US")
+            let microphone = AppleSpeechTranscriber(localeIdentifier: "en-US")
+            remoteAppleSpeech = remote
+            microphoneAppleSpeech = microphone
+            remoteSpeech = remote
+            microphoneSpeech = microphone
+
+        case .remoteOnly:
+            let remote = AppleSpeechTranscriber(localeIdentifier: "en-US")
+            remoteAppleSpeech = remote
+            microphoneAppleSpeech = nil
+            remoteSpeech = remote
+            microphoneSpeech = NativeSmokeDisabledSpeechTranscriber()
+
+        case .microphoneOnly:
+            let microphone = AppleSpeechTranscriber(localeIdentifier: "en-US")
+            remoteAppleSpeech = nil
+            microphoneAppleSpeech = microphone
+            remoteSpeech = NativeSmokeDisabledSpeechTranscriber()
+            microphoneSpeech = microphone
+        }
+
         let runtime = LiveCallSessionRuntime(
             remoteAudio: NativeSmokeRemoteAudioProbe(
                 source: source,
@@ -414,8 +479,10 @@ public final class NativeSmokeRunner {
         }
 
         guard started else {
-            let remoteSpeechDiagnostics = remoteSpeech.diagnosticSnapshot()
-            let microphoneSpeechDiagnostics = microphoneSpeech.diagnosticSnapshot()
+            let remoteSpeechDiagnostics = remoteAppleSpeech?.diagnosticSnapshot()
+                ?? Self.disabledSpeechDiagnostics
+            let microphoneSpeechDiagnostics = microphoneAppleSpeech?.diagnosticSnapshot()
+                ?? Self.disabledSpeechDiagnostics
             session.stop()
             let audio = audioDiagnostics.snapshot()
             return NativeSmokeReport(
@@ -458,8 +525,10 @@ public final class NativeSmokeRunner {
         }
 
         try? await Task.sleep(for: .seconds(seconds))
-        let remoteSpeechDiagnostics = remoteSpeech.diagnosticSnapshot()
-        let microphoneSpeechDiagnostics = microphoneSpeech.diagnosticSnapshot()
+        let remoteSpeechDiagnostics = remoteAppleSpeech?.diagnosticSnapshot()
+            ?? Self.disabledSpeechDiagnostics
+        let microphoneSpeechDiagnostics = microphoneAppleSpeech?.diagnosticSnapshot()
+            ?? Self.disabledSpeechDiagnostics
         session.stop()
         observation.stopCleanup = true
 
@@ -579,6 +648,15 @@ public final class NativeSmokeRunner {
 
     private static var intelligenceState: String {
         AppleNegotiationAdvisor.availability.displayText
+    }
+
+    private static var disabledSpeechDiagnostics: AppleSpeechDiagnosticSnapshot {
+        AppleSpeechDiagnosticSnapshot(
+            taskState: "disabled",
+            errorDomain: nil,
+            errorCode: nil,
+            errorMessage: nil
+        )
     }
 
     private static func processReport(_ source: AudioProcessSource) -> NativeSmokeProcess {
@@ -877,6 +955,12 @@ private final class NativeSmokeMicrophoneAudioProbe: LiveCallMicrophoneAudioSour
     func stop() {
         base.stop()
     }
+}
+
+private final class NativeSmokeDisabledSpeechTranscriber: LiveCallSpeechTranscribing {
+    func start(onTranscript: @escaping (AppleSpeechTranscript) -> Void) throws {}
+    func append(pcmBuffer: AVAudioPCMBuffer) {}
+    func stop() {}
 }
 
 @MainActor

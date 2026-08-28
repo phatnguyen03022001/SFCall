@@ -104,6 +104,18 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
     public var remotePCMFrameCount: Int
     public var microphonePCMBufferCount: Int
     public var microphonePCMFrameCount: Int
+    public var remotePCMSampleRate: Double?
+    public var remotePCMChannelCount: Int?
+    public var remotePCMCommonFormat: String?
+    public var remotePCMInterleaved: Bool?
+    public var remotePCMMaxRMS: Double
+    public var remotePCMNonSilentBufferCount: Int
+    public var microphonePCMSampleRate: Double?
+    public var microphonePCMChannelCount: Int?
+    public var microphonePCMCommonFormat: String?
+    public var microphonePCMInterleaved: Bool?
+    public var microphonePCMMaxRMS: Double
+    public var microphonePCMNonSilentBufferCount: Int
     public var remoteSpeechTaskState: String
     public var remoteSpeechErrorDomain: String?
     public var remoteSpeechErrorCode: Int?
@@ -141,6 +153,18 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
         remotePCMFrameCount: Int = 0,
         microphonePCMBufferCount: Int = 0,
         microphonePCMFrameCount: Int = 0,
+        remotePCMSampleRate: Double? = nil,
+        remotePCMChannelCount: Int? = nil,
+        remotePCMCommonFormat: String? = nil,
+        remotePCMInterleaved: Bool? = nil,
+        remotePCMMaxRMS: Double = 0,
+        remotePCMNonSilentBufferCount: Int = 0,
+        microphonePCMSampleRate: Double? = nil,
+        microphonePCMChannelCount: Int? = nil,
+        microphonePCMCommonFormat: String? = nil,
+        microphonePCMInterleaved: Bool? = nil,
+        microphonePCMMaxRMS: Double = 0,
+        microphonePCMNonSilentBufferCount: Int = 0,
         remoteSpeechTaskState: String = "notObserved",
         remoteSpeechErrorDomain: String? = nil,
         remoteSpeechErrorCode: Int? = nil,
@@ -177,6 +201,18 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
         self.remotePCMFrameCount = remotePCMFrameCount
         self.microphonePCMBufferCount = microphonePCMBufferCount
         self.microphonePCMFrameCount = microphonePCMFrameCount
+        self.remotePCMSampleRate = remotePCMSampleRate
+        self.remotePCMChannelCount = remotePCMChannelCount
+        self.remotePCMCommonFormat = remotePCMCommonFormat
+        self.remotePCMInterleaved = remotePCMInterleaved
+        self.remotePCMMaxRMS = remotePCMMaxRMS
+        self.remotePCMNonSilentBufferCount = remotePCMNonSilentBufferCount
+        self.microphonePCMSampleRate = microphonePCMSampleRate
+        self.microphonePCMChannelCount = microphonePCMChannelCount
+        self.microphonePCMCommonFormat = microphonePCMCommonFormat
+        self.microphonePCMInterleaved = microphonePCMInterleaved
+        self.microphonePCMMaxRMS = microphonePCMMaxRMS
+        self.microphonePCMNonSilentBufferCount = microphonePCMNonSilentBufferCount
         self.remoteSpeechTaskState = remoteSpeechTaskState
         self.remoteSpeechErrorDomain = remoteSpeechErrorDomain
         self.remoteSpeechErrorCode = remoteSpeechErrorCode
@@ -391,6 +427,18 @@ public final class NativeSmokeRunner {
                 remotePCMFrameCount: audio.remoteFrameCount,
                 microphonePCMBufferCount: audio.microphoneBufferCount,
                 microphonePCMFrameCount: audio.microphoneFrameCount,
+                remotePCMSampleRate: audio.remoteSampleRate,
+                remotePCMChannelCount: audio.remoteChannelCount,
+                remotePCMCommonFormat: audio.remoteCommonFormat,
+                remotePCMInterleaved: audio.remoteInterleaved,
+                remotePCMMaxRMS: audio.remoteMaxRMS,
+                remotePCMNonSilentBufferCount: audio.remoteNonSilentBufferCount,
+                microphonePCMSampleRate: audio.microphoneSampleRate,
+                microphonePCMChannelCount: audio.microphoneChannelCount,
+                microphonePCMCommonFormat: audio.microphoneCommonFormat,
+                microphonePCMInterleaved: audio.microphoneInterleaved,
+                microphonePCMMaxRMS: audio.microphoneMaxRMS,
+                microphonePCMNonSilentBufferCount: audio.microphoneNonSilentBufferCount,
                 remoteSpeechTaskState: remoteSpeechDiagnostics.taskState,
                 remoteSpeechErrorDomain: remoteSpeechDiagnostics.errorDomain,
                 remoteSpeechErrorCode: remoteSpeechDiagnostics.errorCode,
@@ -463,6 +511,18 @@ public final class NativeSmokeRunner {
             remotePCMFrameCount: audio.remoteFrameCount,
             microphonePCMBufferCount: audio.microphoneBufferCount,
             microphonePCMFrameCount: audio.microphoneFrameCount,
+            remotePCMSampleRate: audio.remoteSampleRate,
+            remotePCMChannelCount: audio.remoteChannelCount,
+            remotePCMCommonFormat: audio.remoteCommonFormat,
+            remotePCMInterleaved: audio.remoteInterleaved,
+            remotePCMMaxRMS: audio.remoteMaxRMS,
+            remotePCMNonSilentBufferCount: audio.remoteNonSilentBufferCount,
+            microphonePCMSampleRate: audio.microphoneSampleRate,
+            microphonePCMChannelCount: audio.microphoneChannelCount,
+            microphonePCMCommonFormat: audio.microphoneCommonFormat,
+            microphonePCMInterleaved: audio.microphoneInterleaved,
+            microphonePCMMaxRMS: audio.microphoneMaxRMS,
+            microphonePCMNonSilentBufferCount: audio.microphoneNonSilentBufferCount,
             remoteSpeechTaskState: remoteSpeechDiagnostics.taskState,
             remoteSpeechErrorDomain: remoteSpeechDiagnostics.errorDomain,
             remoteSpeechErrorCode: remoteSpeechDiagnostics.errorCode,
@@ -582,28 +642,84 @@ public final class NativeSmokeRunner {
 private struct NativeSmokeAudioSnapshot: Sendable {
     let remoteBufferCount: Int
     let remoteFrameCount: Int
+    let remoteSampleRate: Double?
+    let remoteChannelCount: Int?
+    let remoteCommonFormat: String?
+    let remoteInterleaved: Bool?
+    let remoteMaxRMS: Double
+    let remoteNonSilentBufferCount: Int
     let microphoneBufferCount: Int
     let microphoneFrameCount: Int
+    let microphoneSampleRate: Double?
+    let microphoneChannelCount: Int?
+    let microphoneCommonFormat: String?
+    let microphoneInterleaved: Bool?
+    let microphoneMaxRMS: Double
+    let microphoneNonSilentBufferCount: Int
+}
+
+private struct NativeSmokePCMObservation: Sendable {
+    let sampleRate: Double
+    let channelCount: Int
+    let commonFormat: String
+    let interleaved: Bool
+    let rms: Double
 }
 
 private final class NativeSmokeAudioDiagnostics: @unchecked Sendable {
+    private static let nonSilentRMSThreshold = 0.0001
+
     private let lock = NSLock()
     private var remoteBufferCount = 0
     private var remoteFrameCount = 0
+    private var remoteSampleRate: Double?
+    private var remoteChannelCount: Int?
+    private var remoteCommonFormat: String?
+    private var remoteInterleaved: Bool?
+    private var remoteMaxRMS = 0.0
+    private var remoteNonSilentBufferCount = 0
     private var microphoneBufferCount = 0
     private var microphoneFrameCount = 0
+    private var microphoneSampleRate: Double?
+    private var microphoneChannelCount: Int?
+    private var microphoneCommonFormat: String?
+    private var microphoneInterleaved: Bool?
+    private var microphoneMaxRMS = 0.0
+    private var microphoneNonSilentBufferCount = 0
 
     func recordRemote(_ buffer: AVAudioPCMBuffer) {
+        let observation = Self.observe(buffer)
         lock.lock()
         remoteBufferCount += 1
         remoteFrameCount += Int(buffer.frameLength)
+        if remoteSampleRate == nil {
+            remoteSampleRate = observation.sampleRate
+            remoteChannelCount = observation.channelCount
+            remoteCommonFormat = observation.commonFormat
+            remoteInterleaved = observation.interleaved
+        }
+        remoteMaxRMS = max(remoteMaxRMS, observation.rms)
+        if observation.rms > Self.nonSilentRMSThreshold {
+            remoteNonSilentBufferCount += 1
+        }
         lock.unlock()
     }
 
     func recordMicrophone(_ buffer: AVAudioPCMBuffer) {
+        let observation = Self.observe(buffer)
         lock.lock()
         microphoneBufferCount += 1
         microphoneFrameCount += Int(buffer.frameLength)
+        if microphoneSampleRate == nil {
+            microphoneSampleRate = observation.sampleRate
+            microphoneChannelCount = observation.channelCount
+            microphoneCommonFormat = observation.commonFormat
+            microphoneInterleaved = observation.interleaved
+        }
+        microphoneMaxRMS = max(microphoneMaxRMS, observation.rms)
+        if observation.rms > Self.nonSilentRMSThreshold {
+            microphoneNonSilentBufferCount += 1
+        }
         lock.unlock()
     }
 
@@ -612,11 +728,111 @@ private final class NativeSmokeAudioDiagnostics: @unchecked Sendable {
         let snapshot = NativeSmokeAudioSnapshot(
             remoteBufferCount: remoteBufferCount,
             remoteFrameCount: remoteFrameCount,
+            remoteSampleRate: remoteSampleRate,
+            remoteChannelCount: remoteChannelCount,
+            remoteCommonFormat: remoteCommonFormat,
+            remoteInterleaved: remoteInterleaved,
+            remoteMaxRMS: remoteMaxRMS,
+            remoteNonSilentBufferCount: remoteNonSilentBufferCount,
             microphoneBufferCount: microphoneBufferCount,
-            microphoneFrameCount: microphoneFrameCount
+            microphoneFrameCount: microphoneFrameCount,
+            microphoneSampleRate: microphoneSampleRate,
+            microphoneChannelCount: microphoneChannelCount,
+            microphoneCommonFormat: microphoneCommonFormat,
+            microphoneInterleaved: microphoneInterleaved,
+            microphoneMaxRMS: microphoneMaxRMS,
+            microphoneNonSilentBufferCount: microphoneNonSilentBufferCount
         )
         lock.unlock()
         return snapshot
+    }
+
+    private static func observe(_ buffer: AVAudioPCMBuffer) -> NativeSmokePCMObservation {
+        NativeSmokePCMObservation(
+            sampleRate: buffer.format.sampleRate,
+            channelCount: Int(buffer.format.channelCount),
+            commonFormat: commonFormatName(buffer.format.commonFormat),
+            interleaved: buffer.format.isInterleaved,
+            rms: normalizedRMS(buffer)
+        )
+    }
+
+    private static func commonFormatName(_ format: AVAudioCommonFormat) -> String {
+        switch format {
+        case .pcmFormatOther: "pcmFormatOther"
+        case .pcmFormatFloat32: "pcmFormatFloat32"
+        case .pcmFormatFloat64: "pcmFormatFloat64"
+        case .pcmFormatInt16: "pcmFormatInt16"
+        case .pcmFormatInt32: "pcmFormatInt32"
+        @unknown default: "unknown"
+        }
+    }
+
+    private static func normalizedRMS(_ buffer: AVAudioPCMBuffer) -> Double {
+        let buffers = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        var sumSquares = 0.0
+        var sampleCount = 0
+
+        switch buffer.format.commonFormat {
+        case .pcmFormatFloat32:
+            for audioBuffer in buffers {
+                guard let data = audioBuffer.mData else { continue }
+                let count = Int(audioBuffer.mDataByteSize) / MemoryLayout<Float>.size
+                let samples = data.assumingMemoryBound(to: Float.self)
+                for index in 0..<count {
+                    let value = Double(samples[index])
+                    sumSquares += value * value
+                }
+                sampleCount += count
+            }
+
+        case .pcmFormatFloat64:
+            for audioBuffer in buffers {
+                guard let data = audioBuffer.mData else { continue }
+                let count = Int(audioBuffer.mDataByteSize) / MemoryLayout<Double>.size
+                let samples = data.assumingMemoryBound(to: Double.self)
+                for index in 0..<count {
+                    let value = samples[index]
+                    sumSquares += value * value
+                }
+                sampleCount += count
+            }
+
+        case .pcmFormatInt16:
+            let scale = Double(Int16.max)
+            for audioBuffer in buffers {
+                guard let data = audioBuffer.mData else { continue }
+                let count = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int16>.size
+                let samples = data.assumingMemoryBound(to: Int16.self)
+                for index in 0..<count {
+                    let value = Double(samples[index]) / scale
+                    sumSquares += value * value
+                }
+                sampleCount += count
+            }
+
+        case .pcmFormatInt32:
+            let scale = Double(Int32.max)
+            for audioBuffer in buffers {
+                guard let data = audioBuffer.mData else { continue }
+                let count = Int(audioBuffer.mDataByteSize) / MemoryLayout<Int32>.size
+                let samples = data.assumingMemoryBound(to: Int32.self)
+                for index in 0..<count {
+                    let value = Double(samples[index]) / scale
+                    sumSquares += value * value
+                }
+                sampleCount += count
+            }
+
+        case .pcmFormatOther:
+            return 0
+
+        @unknown default:
+            return 0
+        }
+
+        guard sampleCount > 0 else { return 0 }
+        return (sumSquares / Double(sampleCount)).squareRoot()
     }
 }
 

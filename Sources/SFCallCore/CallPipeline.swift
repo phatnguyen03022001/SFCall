@@ -68,11 +68,12 @@ public final class CallTurnCoordinator: @unchecked Sendable {
     ) -> ResponseRequest? {
         guard isFinal else { return nil }
 
-        let turn = ConversationTurn(speaker: speaker, text: text)
-        finalizedTurns.append(turn)
-        if finalizedTurns.count > maxRecentTurns {
-            finalizedTurns.removeFirst(finalizedTurns.count - maxRecentTurns)
-        }
+        insertFinalizedTurn(
+            speaker: speaker,
+            text: text,
+            into: &finalizedTurns,
+            maxRecentTurns: maxRecentTurns
+        )
 
         guard speaker == .client else { return nil }
 
@@ -134,10 +135,12 @@ public final class LiveCallRouter: @unchecked Sendable {
         clientFacts: [ClientFactRecord]
     ) -> ResponseRequest? {
         if isFinal {
-            recentTurns.append(ConversationTurn(speaker: speaker, text: text))
-            if recentTurns.count > maxRecentTurns {
-                recentTurns.removeFirst(recentTurns.count - maxRecentTurns)
-            }
+            insertFinalizedTurn(
+                speaker: speaker,
+                text: text,
+                into: &recentTurns,
+                maxRecentTurns: maxRecentTurns
+            )
         }
 
         return coordinator.ingest(
@@ -147,5 +150,27 @@ public final class LiveCallRouter: @unchecked Sendable {
             baseline: baseline,
             clientFacts: clientFacts
         )
+    }
+}
+
+private func insertFinalizedTurn(
+    speaker: TranscriptSpeaker,
+    text: String,
+    into turns: inout [ConversationTurn],
+    maxRecentTurns: Int
+) {
+    let incomingText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let previous = turns.last, previous.speaker == speaker, !incomingText.isEmpty {
+        let previousText = previous.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let coalescedText = previousText.isEmpty
+            ? incomingText
+            : previousText + " " + incomingText
+        turns[turns.count - 1] = ConversationTurn(speaker: speaker, text: coalescedText)
+    } else {
+        turns.append(ConversationTurn(speaker: speaker, text: text))
+    }
+
+    if turns.count > maxRecentTurns {
+        turns.removeFirst(turns.count - maxRecentTurns)
     }
 }

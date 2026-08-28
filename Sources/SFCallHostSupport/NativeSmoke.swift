@@ -174,16 +174,16 @@ public struct NativeSmokeReport: Codable, Equatable, Sendable {
 public final class NativeSmokeRunner {
     private let catalog: AudioProcessSourceCatalog
     private let advisor: any NegotiationAdviceProvider
-    private let historyStore: HostCallHistoryStore
+    private let injectedHistoryStore: HostCallHistoryStore?
 
     public init(
         catalog: AudioProcessSourceCatalog = AudioProcessSourceCatalog(),
         advisor: any NegotiationAdviceProvider = AppleNegotiationAdvisor(),
         historyStore: HostCallHistoryStore? = nil
-    ) throws {
+    ) {
         self.catalog = catalog
         self.advisor = advisor
-        self.historyStore = try historyStore ?? HostCallHistoryStore()
+        self.injectedHistoryStore = historyStore
     }
 
     public func run(_ configuration: NativeSmokeConfiguration) async -> NativeSmokeReport {
@@ -236,6 +236,20 @@ public final class NativeSmokeRunner {
             )
         }
 
+        let historyStore: HostCallHistoryStore
+        do {
+            historyStore = try injectedHistoryStore ?? HostCallHistoryStore()
+        } catch {
+            return NativeSmokeReport(
+                result: "RUNTIME_FAIL",
+                processes: processes,
+                microphonePermission: "authorized",
+                speechPermission: "authorized",
+                intelligenceState: Self.intelligenceState,
+                firstFailure: "Local history setup failed — \(Self.message(for: error))"
+            )
+        }
+
         let prepared: HostPreparedCallSession
         do {
             prepared = try historyStore.prepareSession()
@@ -259,11 +273,17 @@ public final class NativeSmokeRunner {
             hud: hud,
             onResponseRequest: { [advisor] request in
                 observation.clientRequestCount += 1
+                observation.adviceGeneration += 1
+                let generation = observation.adviceGeneration
                 observation.adviceTasks.append(
                     Task { @MainActor in
                         do {
-                            observation.latestAdvice = try await advisor.advise(for: request)
+                            let advice = try await advisor.advise(for: request)
+                            guard observation.adviceGeneration == generation else { return }
+                            observation.latestAdvice = advice
+                            observation.adviceFailure = nil
                         } catch {
+                            guard observation.adviceGeneration == generation else { return }
                             observation.adviceFailure = Self.message(for: error)
                         }
                     }
@@ -385,7 +405,11 @@ public final class NativeSmokeRunner {
         speech: SFSpeechRecognizerAuthorizationStatus
     ) {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-            _ = await AVCaptureDevice.requestAccess(for: .audio)
+            await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { _ in
+                    continuation.resume()
+                }
+            }
         }
 
         if SFSpeechRecognizer.authorizationStatus() == .notDetermined {
@@ -450,6 +474,7 @@ private final class NativeSmokeObservation {
     var clientFinals: [String] = []
     var userFinals: [String] = []
     var clientRequestCount = 0
+    var adviceGeneration = 0
     var latestAdvice: NegotiationAdvice?
     var adviceFailure: String?
     var historyFailure: String?

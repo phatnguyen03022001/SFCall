@@ -166,6 +166,60 @@ final class SingleRecognizerTurnSchedulerTests: XCTestCase {
         XCTAssertEqual(factory.engines.count, 2)
     }
 
+    func testNormalMicrophoneSpeechBelowClientThresholdStartsUserRecognition() throws {
+        let clock = TestClock()
+        let factory = FakeRecognitionFactory()
+        let coordinator = SingleRecognizerTurnCoordinator(
+            engineFactory: { factory.makeEngine() },
+            now: { clock.now }
+        )
+        try start(coordinator)
+
+        sendActiveUserAudio(
+            to: coordinator.userEndpoint,
+            clock: clock,
+            amplitudes: [0.010, 0.010]
+        )
+
+        XCTAssertEqual(factory.engines.count, 1)
+    }
+
+    func testSameLowLevelAudioDoesNotStartClientRecognition() throws {
+        let clock = TestClock()
+        let factory = FakeRecognitionFactory()
+        let coordinator = SingleRecognizerTurnCoordinator(
+            engineFactory: { factory.makeEngine() },
+            now: { clock.now }
+        )
+        try start(coordinator)
+
+        sendActiveClientAudio(
+            to: coordinator.clientEndpoint,
+            clock: clock,
+            amplitudes: [0.010, 0.010]
+        )
+
+        XCTAssertTrue(factory.engines.isEmpty)
+    }
+
+    func testVeryLowLevelUserNoiseDoesNotStartRecognition() throws {
+        let clock = TestClock()
+        let factory = FakeRecognitionFactory()
+        let coordinator = SingleRecognizerTurnCoordinator(
+            engineFactory: { factory.makeEngine() },
+            now: { clock.now }
+        )
+        try start(coordinator)
+
+        sendActiveUserAudio(
+            to: coordinator.userEndpoint,
+            clock: clock,
+            amplitudes: [0.0001, 0.0001]
+        )
+
+        XCTAssertTrue(factory.engines.isEmpty)
+    }
+
     private func start(_ coordinator: SingleRecognizerTurnCoordinator) throws {
         try coordinator.clientEndpoint.start { _ in }
         try coordinator.userEndpoint.start { _ in }
